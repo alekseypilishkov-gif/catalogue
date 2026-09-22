@@ -7,6 +7,10 @@ interface PointData {
   positions: Array<{ x: number, y: number, z: number }>
 }
 
+const emit = defineEmits<{
+  introStart: [reducedMotion: boolean]
+}>()
+
 const canvas = ref<HTMLCanvasElement | null>(null)
 const asset = useAssetUrl()
 const isDebugPanelOpen = ref(true)
@@ -14,32 +18,167 @@ const cameraView = ref<'front' | 'perspective'>('front')
 const settings = reactive({
   rotationX: 0,
   rotationY: 0,
-  rotationZ: 0,
+  rotationZ: 2.77,
   scale: 1,
   verticalOffset: 0,
   cameraDistance: 1.2,
   pointSize: 0.006,
-  opacity: 0.72,
+  opacity: 0.68,
+  introDuration: 1.45,
+  flowStrength: 0.24,
+  turbulenceStrength: 0.055,
+  idleStrength: 0.002,
+  ambientVisible: true,
   showAxes: false,
   showGrid: false,
 })
 
+const logoVertexShader = `
+  attribute vec3 startPosition;
+  attribute vec3 randomSeed;
+  attribute float phase;
+  attribute float delay;
+
+  uniform float uTime;
+  uniform float uIntroProgress;
+  uniform float uFlowStrength;
+  uniform float uTurbulenceStrength;
+  uniform float uIdleStrength;
+  uniform float uPointSize;
+  uniform float uViewportHeight;
+
+  float easeOutCubic(float value) {
+    float inverse = 1.0 - value;
+    return 1.0 - inverse * inverse * inverse;
+  }
+
+  void main() {
+    float localProgress = clamp((uIntroProgress - delay) / max(0.001, 1.0 - delay), 0.0, 1.0);
+    float easedProgress = easeOutCubic(localProgress);
+    float flowWindow = sin(localProgress * 3.14159265) * (1.0 - localProgress * 0.25);
+    float turbulenceWindow = (1.0 - localProgress) * sin(localProgress * 3.14159265);
+
+    vec3 curvedFlow = vec3(
+      sin(phase + localProgress * 5.5) * (0.45 + abs(randomSeed.x)),
+      cos(phase * 0.7 + localProgress * 4.0) * (0.28 + abs(randomSeed.y)),
+      sin(phase * 1.3 - localProgress * 4.6) * (0.38 + abs(randomSeed.z))
+    ) * uFlowStrength * flowWindow;
+
+    vec3 turbulence = vec3(
+      sin(phase * 2.1 + localProgress * 17.0),
+      cos(phase * 1.7 - localProgress * 13.0),
+      sin(phase * 2.7 + localProgress * 15.0)
+    ) * uTurbulenceStrength * turbulenceWindow;
+
+    vec3 animatedPosition = mix(startPosition, position, easedProgress) + curvedFlow + turbulence;
+    float idleEnvelope = smoothstep(0.72, 1.0, uIntroProgress);
+    vec3 idleOffset = vec3(
+      sin(uTime * 0.72 + phase),
+      cos(uTime * 0.58 + phase * 1.21),
+      sin(uTime * 0.64 + phase * 0.83)
+    ) * uIdleStrength * idleEnvelope;
+    animatedPosition += idleOffset;
+
+    vec4 modelViewPosition = modelViewMatrix * vec4(animatedPosition, 1.0);
+    gl_Position = projectionMatrix * modelViewPosition;
+    gl_PointSize = clamp(uPointSize * uViewportHeight * 0.5 / max(0.15, -modelViewPosition.z), 1.0, 8.0);
+  }
+`
+
+const logoFragmentShader = `
+  uniform vec3 uColor;
+  uniform float uOpacity;
+
+  void main() {
+    float distanceToCenter = distance(gl_PointCoord, vec2(0.5));
+    float softCircle = 1.0 - smoothstep(0.28, 0.5, distanceToCenter);
+    if (softCircle <= 0.0) discard;
+    gl_FragColor = vec4(uColor, uOpacity * softCircle);
+  }
+`
+
+const ambientVertexShader = `
+  attribute vec3 drift;
+  attribute float phase;
+
+  uniform float uTime;
+  uniform float uPointSize;
+  uniform float uViewportHeight;
+
+  void main() {
+    vec3 animatedPosition = position + vec3(
+      sin(uTime * 0.13 + phase) * drift.x,
+      cos(uTime * 0.11 + phase * 1.17) * drift.y,
+      sin(uTime * 0.09 + phase * 0.83) * drift.z
+    );
+    vec4 modelViewPosition = modelViewMatrix * vec4(animatedPosition, 1.0);
+    gl_Position = projectionMatrix * modelViewPosition;
+    gl_PointSize = clamp(uPointSize * uViewportHeight * 0.5 / max(0.15, -modelViewPosition.z), 0.8, 3.0);
+  }
+`
+
+const ambientFragmentShader = `
+  uniform vec3 uColor;
+  uniform float uOpacity;
+
+  void main() {
+    float distanceToCenter = distance(gl_PointCoord, vec2(0.5));
+    float softCircle = 1.0 - smoothstep(0.2, 0.5, distanceToCenter);
+    if (softCircle <= 0.0) discard;
+    gl_FragColor = vec4(uColor, uOpacity * softCircle);
+  }
+`
+
 let renderer: THREE.WebGLRenderer | undefined
 let scene: THREE.Scene | undefined
 let camera: THREE.PerspectiveCamera | undefined
-let geometry: THREE.BufferGeometry | undefined
-let material: THREE.PointsMaterial | undefined
+let logoGeometry: THREE.BufferGeometry | undefined
+let logoMaterial: THREE.ShaderMaterial | undefined
+let ambientGeometry: THREE.BufferGeometry | undefined
+let ambientMaterial: THREE.ShaderMaterial | undefined
 let resizeObserver: ResizeObserver | undefined
-let points: THREE.Points | undefined
+let reducedMotionQuery: MediaQueryList | undefined
+let logoPoints: THREE.Points | undefined
+let ambientPoints: THREE.Points | undefined
 let axesHelper: THREE.AxesHelper | undefined
 let gridHelper: THREE.GridHelper | undefined
+let introStartTime = 0
+let reducedMotion = false
+let disposed = false
 
-/** Keeps the final logo coordinates ready for a future current-to-target morph. */
+/** CPU-side position sets stay isolated so a future morph can replace the target safely. */
+let startPositions: Float32Array | undefined
 let currentPositions: Float32Array | undefined
 let targetPositions: Float32Array | undefined
 
-function render() {
+function renderScene() {
   if (renderer && scene && camera) renderer.render(scene, camera)
+}
+
+function animate(time: number) {
+  if (!renderer || !scene || !camera || !logoMaterial || !ambientMaterial) return
+  const elapsedSeconds = Math.max(0, time - introStartTime) / 1000
+  logoMaterial.uniforms.uTime!.value = time / 1000
+  logoMaterial.uniforms.uIntroProgress!.value = Math.min(1, elapsedSeconds / settings.introDuration)
+  ambientMaterial.uniforms.uTime!.value = time / 1000
+  renderer.render(scene, camera)
+}
+
+function syncAnimationLoop() {
+  if (!renderer) return
+  renderer.setAnimationLoop(reducedMotion ? null : animate)
+  if (reducedMotion) renderScene()
+}
+
+function createRandom(seed: number) {
+  let state = seed >>> 0
+  return () => {
+    state += 0x6D2B79F5
+    let value = state
+    value = Math.imul(value ^ value >>> 15, value | 1)
+    value ^= value + Math.imul(value ^ value >>> 7, value | 61)
+    return ((value ^ value >>> 14) >>> 0) / 4294967296
+  }
 }
 
 function updateCamera() {
@@ -56,25 +195,34 @@ function updateCamera() {
 }
 
 function applySettings() {
-  if (points) {
-    points.rotation.set(settings.rotationX, settings.rotationY, settings.rotationZ)
-    points.scale.setScalar(settings.scale)
-    points.position.z = settings.verticalOffset
+  if (logoPoints) {
+    logoPoints.rotation.set(settings.rotationX, settings.rotationY, settings.rotationZ)
+    logoPoints.scale.setScalar(settings.scale)
+    logoPoints.position.z = settings.verticalOffset
   }
-  if (material) {
-    material.size = settings.pointSize
-    material.opacity = settings.opacity
-    material.needsUpdate = true
+  if (logoMaterial) {
+    logoMaterial.uniforms.uPointSize!.value = settings.pointSize
+    logoMaterial.uniforms.uOpacity!.value = settings.opacity
+    logoMaterial.uniforms.uFlowStrength!.value = settings.flowStrength
+    logoMaterial.uniforms.uTurbulenceStrength!.value = settings.turbulenceStrength
+    logoMaterial.uniforms.uIdleStrength!.value = reducedMotion ? 0 : settings.idleStrength
   }
+  if (ambientPoints) ambientPoints.visible = settings.ambientVisible && !reducedMotion
   if (axesHelper) axesHelper.visible = settings.showAxes
   if (gridHelper) gridHelper.visible = settings.showGrid
   updateCamera()
-  render()
+  if (reducedMotion) renderScene()
 }
 
 function setCameraView(view: 'front' | 'perspective') {
   cameraView.value = view
   applySettings()
+}
+
+function restartIntro() {
+  if (reducedMotion || !logoMaterial) return
+  introStartTime = performance.now()
+  logoMaterial.uniforms.uIntroProgress!.value = 0
 }
 
 watch(settings, applySettings, { deep: true })
@@ -85,84 +233,192 @@ function resize() {
   const { width, height } = canvas.value.getBoundingClientRect()
   if (!width || !height) return
 
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5))
+  const pixelRatio = Math.min(window.devicePixelRatio, 1.5)
+  renderer.setPixelRatio(pixelRatio)
   renderer.setSize(width, height, false)
   camera.aspect = width / height
   camera.updateProjectionMatrix()
-  render()
+  if (logoMaterial) logoMaterial.uniforms.uViewportHeight!.value = height * pixelRatio
+  if (ambientMaterial) ambientMaterial.uniforms.uViewportHeight!.value = height * pixelRatio
+  if (reducedMotion) renderScene()
+}
+
+function handleReducedMotion(event: MediaQueryListEvent) {
+  reducedMotion = event.matches
+  if (logoMaterial) {
+    logoMaterial.uniforms.uIntroProgress!.value = reducedMotion ? 1 : 0
+    logoMaterial.uniforms.uIdleStrength!.value = reducedMotion ? 0 : settings.idleStrength
+  }
+  if (!reducedMotion) introStartTime = performance.now()
+  applySettings()
+  syncAnimationLoop()
 }
 
 function dispose() {
+  disposed = true
   resizeObserver?.disconnect()
-  resizeObserver = undefined
-  geometry?.dispose()
-  material?.dispose()
+  reducedMotionQuery?.removeEventListener('change', handleReducedMotion)
+  renderer?.setAnimationLoop(null)
+  logoGeometry?.dispose()
+  logoMaterial?.dispose()
+  ambientGeometry?.dispose()
+  ambientMaterial?.dispose()
   renderer?.dispose()
   renderer = undefined
   scene = undefined
   camera = undefined
-  geometry = undefined
-  material = undefined
-  points = undefined
+  logoGeometry = undefined
+  logoMaterial = undefined
+  ambientGeometry = undefined
+  ambientMaterial = undefined
+  logoPoints = undefined
+  ambientPoints = undefined
   axesHelper = undefined
   gridHelper = undefined
   currentPositions = undefined
+  startPositions = undefined
   targetPositions = undefined
 }
 
 onMounted(async () => {
   if (!canvas.value) return
 
-  const [three, response] = await Promise.all([
-    import('three'),
-    fetch(asset('particles/ld_logo_points.json')),
-  ])
-  if (!response.ok) throw new Error(`Unable to load LD logo particle data: ${response.status}`)
-  const data = await response.json() as PointData
+  try {
+    const [three, response] = await Promise.all([
+      import('three'),
+      fetch(asset('particles/ld_logo_points.json')),
+    ])
+    if (!response.ok) throw new Error(`Unable to load LD logo particle data: ${response.status}`)
+    const data = await response.json() as PointData
+    if (disposed || !canvas.value) return
 
-  targetPositions = new Float32Array(data.positions.length * 3)
-  data.positions.forEach(({ x, y, z }, index) => {
-    const offset = index * 3
-    targetPositions![offset] = x
-    targetPositions![offset + 1] = y
-    targetPositions![offset + 2] = z
-  })
-  currentPositions = targetPositions.slice()
+    const sessionSeed = crypto.getRandomValues(new Uint32Array(1))[0] ?? Date.now()
+    const random = createRandom(sessionSeed)
+    const pointCount = data.positions.length
+    targetPositions = new Float32Array(pointCount * 3)
+    startPositions = new Float32Array(pointCount * 3)
+    const randomSeeds = new Float32Array(pointCount * 3)
+    const phases = new Float32Array(pointCount)
+    const delays = new Float32Array(pointCount)
 
-  scene = new three.Scene()
-  camera = new three.PerspectiveCamera(40, 1, 0.1, 10)
-  updateCamera()
+    data.positions.forEach(({ x, y, z }, index) => {
+      const offset = index * 3
+      const angle = random() * Math.PI * 2
+      const radius = Math.pow(random(), 0.58)
+      const verticalAngle = (random() - 0.5) * Math.PI
+      targetPositions![offset] = x
+      targetPositions![offset + 1] = y
+      targetPositions![offset + 2] = z
+      startPositions![offset] = Math.cos(angle) * radius * (0.58 + random() * 0.48)
+      startPositions![offset + 1] = (random() - 0.5) * (0.34 + radius * 0.32)
+      startPositions![offset + 2] = 0.22 + Math.sin(verticalAngle) * radius * (0.34 + random() * 0.28)
+      randomSeeds[offset] = random() * 2 - 1
+      randomSeeds[offset + 1] = random() * 2 - 1
+      randomSeeds[offset + 2] = random() * 2 - 1
+      phases[index] = random() * Math.PI * 2
+      delays[index] = Math.pow(random(), 1.8) * 0.14
+    })
+    currentPositions = startPositions.slice()
 
-  geometry = new three.BufferGeometry()
-  geometry.setAttribute('position', new three.BufferAttribute(currentPositions, 3))
-  material = new three.PointsMaterial({
-    color: '#d7ffff',
-    size: settings.pointSize,
-    sizeAttenuation: true,
-    transparent: true,
-    opacity: settings.opacity,
-    depthWrite: false,
-  })
-  points = new three.Points(geometry, material)
-  scene.add(points)
+    const accentColor = getComputedStyle(document.documentElement).getPropertyValue('--color-accent').trim() || '#ffec00'
+    scene = new three.Scene()
+    camera = new three.PerspectiveCamera(40, 1, 0.1, 10)
+    updateCamera()
 
-  axesHelper = new three.AxesHelper(0.35)
-  axesHelper.position.set(-0.5, 0, 0)
-  axesHelper.visible = settings.showAxes
-  scene.add(axesHelper)
+    logoGeometry = new three.BufferGeometry()
+    logoGeometry.setAttribute('position', new three.BufferAttribute(targetPositions, 3))
+    logoGeometry.setAttribute('startPosition', new three.BufferAttribute(startPositions, 3))
+    logoGeometry.setAttribute('randomSeed', new three.BufferAttribute(randomSeeds, 3))
+    logoGeometry.setAttribute('phase', new three.BufferAttribute(phases, 1))
+    logoGeometry.setAttribute('delay', new three.BufferAttribute(delays, 1))
+    logoMaterial = new three.ShaderMaterial({
+      vertexShader: logoVertexShader,
+      fragmentShader: logoFragmentShader,
+      uniforms: {
+        uTime: { value: 0 },
+        uIntroProgress: { value: 0 },
+        uFlowStrength: { value: settings.flowStrength },
+        uTurbulenceStrength: { value: settings.turbulenceStrength },
+        uIdleStrength: { value: settings.idleStrength },
+        uPointSize: { value: settings.pointSize },
+        uViewportHeight: { value: 1 },
+        uColor: { value: new three.Color(accentColor) },
+        uOpacity: { value: settings.opacity },
+      },
+      transparent: true,
+      depthWrite: false,
+      depthTest: false,
+    })
+    logoPoints = new three.Points(logoGeometry, logoMaterial)
+    logoPoints.frustumCulled = false
+    logoPoints.renderOrder = 1
+    scene.add(logoPoints)
 
-  gridHelper = new three.GridHelper(1.2, 12, 0x5ad6d2, 0x315b5a)
-  gridHelper.position.set(0, 0, 0.22)
-  gridHelper.visible = settings.showGrid
-  scene.add(gridHelper)
+    const ambientCount = 720
+    const ambientPositions = new Float32Array(ambientCount * 3)
+    const ambientDrift = new Float32Array(ambientCount * 3)
+    const ambientPhases = new Float32Array(ambientCount)
+    for (let index = 0; index < ambientCount; index += 1) {
+      const offset = index * 3
+      const angle = random() * Math.PI * 2
+      const radius = Math.sqrt(random())
+      ambientPositions[offset] = Math.cos(angle) * radius * 1.18
+      ambientPositions[offset + 1] = (random() - 0.5) * 0.72
+      ambientPositions[offset + 2] = 0.22 + Math.sin(angle) * radius * 0.72 + (random() - 0.5) * 0.32
+      ambientDrift[offset] = 0.008 + random() * 0.018
+      ambientDrift[offset + 1] = 0.006 + random() * 0.015
+      ambientDrift[offset + 2] = 0.008 + random() * 0.018
+      ambientPhases[index] = random() * Math.PI * 2
+    }
+    ambientGeometry = new three.BufferGeometry()
+    ambientGeometry.setAttribute('position', new three.BufferAttribute(ambientPositions, 3))
+    ambientGeometry.setAttribute('drift', new three.BufferAttribute(ambientDrift, 3))
+    ambientGeometry.setAttribute('phase', new three.BufferAttribute(ambientPhases, 1))
+    ambientMaterial = new three.ShaderMaterial({
+      vertexShader: ambientVertexShader,
+      fragmentShader: ambientFragmentShader,
+      uniforms: {
+        uTime: { value: 0 },
+        uPointSize: { value: 0.0028 },
+        uViewportHeight: { value: 1 },
+        uColor: { value: new three.Color('#c9d0cf') },
+        uOpacity: { value: 0.18 },
+      },
+      transparent: true,
+      depthWrite: false,
+      depthTest: false,
+    })
+    ambientPoints = new three.Points(ambientGeometry, ambientMaterial)
+    ambientPoints.frustumCulled = false
+    scene.add(ambientPoints)
 
-  renderer = new three.WebGLRenderer({ canvas: canvas.value, alpha: true, antialias: false, powerPreference: 'high-performance' })
-  renderer.setClearColor(0x000000, 0)
+    axesHelper = new three.AxesHelper(0.35)
+    axesHelper.position.set(-0.5, 0, 0)
+    scene.add(axesHelper)
 
-  resizeObserver = new ResizeObserver(resize)
-  resizeObserver.observe(canvas.value)
-  applySettings()
-  resize()
+    gridHelper = new three.GridHelper(1.2, 12, 0x5ad6d2, 0x315b5a)
+    gridHelper.position.set(0, 0, 0.22)
+    scene.add(gridHelper)
+
+    renderer = new three.WebGLRenderer({ canvas: canvas.value, alpha: true, antialias: false, powerPreference: 'high-performance' })
+    renderer.setClearColor(0x000000, 0)
+
+    reducedMotionQuery = window.matchMedia('(prefers-reduced-motion: reduce)')
+    reducedMotion = reducedMotionQuery.matches
+    logoMaterial.uniforms.uIntroProgress!.value = reducedMotion ? 1 : 0
+    reducedMotionQuery.addEventListener('change', handleReducedMotion)
+    resizeObserver = new ResizeObserver(resize)
+    resizeObserver.observe(canvas.value)
+    introStartTime = performance.now()
+    applySettings()
+    resize()
+    emit('introStart', reducedMotion)
+    syncAnimationLoop()
+  } catch (error) {
+    console.error('[ParticleLogo] Initialization failed', error)
+    dispose()
+    emit('introStart', true)
+  }
 })
 
 onBeforeUnmount(dispose)
@@ -177,29 +433,38 @@ onBeforeUnmount(dispose)
           {{ isDebugPanelOpen ? 'Hide particle controls' : 'Particle controls' }}
         </button>
         <div v-if="isDebugPanelOpen" class="particle-debug__panel">
-        <div class="particle-debug__group">
-          <h2>Transform</h2>
-          <label>Rotation X <output>{{ settings.rotationX.toFixed(2) }}</output><input v-model.number="settings.rotationX" type="range" min="-3.14" max="3.14" step="0.01" /></label>
-          <label>Rotation Y <output>{{ settings.rotationY.toFixed(2) }}</output><input v-model.number="settings.rotationY" type="range" min="-3.14" max="3.14" step="0.01" /></label>
-          <label>Rotation Z <output>{{ settings.rotationZ.toFixed(2) }}</output><input v-model.number="settings.rotationZ" type="range" min="-3.14" max="3.14" step="0.01" /></label>
-          <label>Scale <output>{{ settings.scale.toFixed(2) }}</output><input v-model.number="settings.scale" type="range" min="0.25" max="2" step="0.01" /></label>
-          <label>Vertical offset <output>{{ settings.verticalOffset.toFixed(2) }}</output><input v-model.number="settings.verticalOffset" type="range" min="-1" max="1" step="0.01" /></label>
-        </div>
-        <div class="particle-debug__group">
-          <h2>Camera</h2>
-          <label>Distance <output>{{ settings.cameraDistance.toFixed(2) }}</output><input v-model.number="settings.cameraDistance" type="range" min="0.5" max="3" step="0.01" /></label>
-          <div class="particle-debug__actions"><button type="button" :class="{ 'is-active': cameraView === 'front' }" @click="setCameraView('front')">Front view</button><button type="button" :class="{ 'is-active': cameraView === 'perspective' }" @click="setCameraView('perspective')">Perspective view</button></div>
-        </div>
-        <div class="particle-debug__group">
-          <h2>Particles</h2>
-          <label>Point size <output>{{ settings.pointSize.toFixed(3) }}</output><input v-model.number="settings.pointSize" type="range" min="0.001" max="0.02" step="0.001" /></label>
-          <label>Opacity <output>{{ settings.opacity.toFixed(2) }}</output><input v-model.number="settings.opacity" type="range" min="0.05" max="1" step="0.01" /></label>
-        </div>
-        <div class="particle-debug__group particle-debug__switches">
-          <h2>Debug</h2>
-          <label><input v-model="settings.showAxes" type="checkbox" /> Show XYZ axes</label>
-          <label><input v-model="settings.showGrid" type="checkbox" /> Show grid</label>
-        </div>
+          <div class="particle-debug__group">
+            <h2>Transform</h2>
+            <label>Rotation X <output>{{ settings.rotationX.toFixed(2) }}</output><input v-model.number="settings.rotationX" type="range" min="-3.14" max="3.14" step="0.01" /></label>
+            <label>Rotation Y <output>{{ settings.rotationY.toFixed(2) }}</output><input v-model.number="settings.rotationY" type="range" min="-3.14" max="3.14" step="0.01" /></label>
+            <label>Rotation Z <output>{{ settings.rotationZ.toFixed(2) }}</output><input v-model.number="settings.rotationZ" type="range" min="-3.14" max="3.14" step="0.01" /></label>
+            <label>Scale <output>{{ settings.scale.toFixed(2) }}</output><input v-model.number="settings.scale" type="range" min="0.25" max="2" step="0.01" /></label>
+            <label>Vertical offset <output>{{ settings.verticalOffset.toFixed(2) }}</output><input v-model.number="settings.verticalOffset" type="range" min="-1" max="1" step="0.01" /></label>
+          </div>
+          <div class="particle-debug__group">
+            <h2>Camera</h2>
+            <label>Distance <output>{{ settings.cameraDistance.toFixed(2) }}</output><input v-model.number="settings.cameraDistance" type="range" min="0.5" max="3" step="0.01" /></label>
+            <div class="particle-debug__actions"><button type="button" :class="{ 'is-active': cameraView === 'front' }" @click="setCameraView('front')">Front view</button><button type="button" :class="{ 'is-active': cameraView === 'perspective' }" @click="setCameraView('perspective')">Perspective view</button></div>
+          </div>
+          <div class="particle-debug__group">
+            <h2>Formation</h2>
+            <label>Intro duration <output>{{ settings.introDuration.toFixed(2) }} s</output><input v-model.number="settings.introDuration" type="range" min="1.2" max="1.6" step="0.01" /></label>
+            <label>Flow strength <output>{{ settings.flowStrength.toFixed(3) }}</output><input v-model.number="settings.flowStrength" type="range" min="0" max="0.5" step="0.005" /></label>
+            <label>Turbulence <output>{{ settings.turbulenceStrength.toFixed(3) }}</output><input v-model.number="settings.turbulenceStrength" type="range" min="0" max="0.2" step="0.005" /></label>
+            <label>Idle strength <output>{{ settings.idleStrength.toFixed(3) }}</output><input v-model.number="settings.idleStrength" type="range" min="0" max="0.02" step="0.001" /></label>
+            <button class="particle-debug__wide-action" type="button" @click="restartIntro">Replay intro</button>
+          </div>
+          <div class="particle-debug__group">
+            <h2>Particles</h2>
+            <label>Point size <output>{{ settings.pointSize.toFixed(3) }}</output><input v-model.number="settings.pointSize" type="range" min="0.001" max="0.02" step="0.001" /></label>
+            <label>Opacity <output>{{ settings.opacity.toFixed(2) }}</output><input v-model.number="settings.opacity" type="range" min="0.05" max="1" step="0.01" /></label>
+            <label class="particle-debug__check"><input v-model="settings.ambientVisible" type="checkbox" /> Ambient particles</label>
+          </div>
+          <div class="particle-debug__group particle-debug__switches">
+            <h2>Debug</h2>
+            <label><input v-model="settings.showAxes" type="checkbox" /> Show XYZ axes</label>
+            <label><input v-model="settings.showGrid" type="checkbox" /> Show grid</label>
+          </div>
         </div>
       </section>
     </Teleport>
@@ -218,9 +483,9 @@ onBeforeUnmount(dispose)
 .particle-debug output { color: #9debe7; font-variant-numeric: tabular-nums; }
 .particle-debug input[type='range'] { grid-column: 1 / -1; width: 100%; accent-color: #9debe7; }
 .particle-debug__actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
-.particle-debug__actions button { padding: 6px; border: 1px solid rgb(157 235 231 / 35%); border-radius: 4px; background: transparent; color: inherit; cursor: pointer; }
+.particle-debug__actions button, .particle-debug__wide-action { padding: 6px; border: 1px solid rgb(157 235 231 / 35%); border-radius: 4px; background: transparent; color: inherit; cursor: pointer; }
 .particle-debug__actions button.is-active { background: rgb(157 235 231 / 20%); border-color: #9debe7; }
-.particle-debug__switches label { grid-template-columns: auto 1fr; justify-content: start; }
-.particle-debug__switches input { accent-color: #9debe7; }
+.particle-debug__switches label, .particle-debug label.particle-debug__check { grid-template-columns: auto 1fr; justify-content: start; }
+.particle-debug__switches input, .particle-debug__check input { accent-color: #9debe7; }
 @media (max-width: 599px) { .particle-debug { bottom: 8px; left: 8px; width: min(290px, calc(100vw - 16px)); } }
 </style>

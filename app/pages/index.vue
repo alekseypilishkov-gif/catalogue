@@ -4,21 +4,24 @@ const selectedIndustry = ref<string | null>(null)
 const visibleCardCount = ref(0)
 const totalEntranceCards = mainCategories.length + industries.length
 let entranceTimer: ReturnType<typeof setTimeout> | undefined
+let entranceStarted = false
 
-onMounted(() => {
-  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+function startCardEntrance(reducedMotion: boolean) {
+  if (entranceStarted) return
+  entranceStarted = true
+  if (reducedMotion) {
     visibleCardCount.value = totalEntranceCards
     return
   }
 
-  requestAnimationFrame(() => {
+  entranceTimer = window.setTimeout(() => {
     const revealNextCard = () => {
       visibleCardCount.value += 1
       if (visibleCardCount.value < totalEntranceCards) entranceTimer = window.setTimeout(revealNextCard, 80)
     }
     revealNextCard()
-  })
-})
+  }, 300)
+}
 
 onBeforeUnmount(() => {
   if (entranceTimer) window.clearTimeout(entranceTimer)
@@ -38,7 +41,7 @@ onBeforeUnmount(() => {
         </div>
         <section class="catalogue-hero" aria-label="Выбор каталога">
           <div class="container catalogue-grid">
-            <ParticlesParticleLogo class="hero-particles" />
+            <ParticlesParticleLogo class="hero-particles" @intro-start="startCardEntrance" />
             <section class="catalogue-column catalogue-primary" aria-labelledby="main-categories-title">
               <h2 id="main-categories-title">Основные</h2>
               <p class="section-description">Ознакомьтесь с ассортиментом и техническими данным нашей продукции</p>
