@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import type * as THREE from 'three'
-import { buildConnectedParticleGraph } from '~/utils/connectedParticleGraph'
 
 interface PointData {
   name: string
@@ -9,7 +8,6 @@ interface PointData {
 }
 
 type ParticleState = 'field' | 'transition' | 'logo'
-type LogoMode = 'classic' | 'connected'
 
 const emit = defineEmits<{
   introStart: [reducedMotion: boolean]
@@ -21,7 +19,6 @@ const asset = useAssetUrl()
 const isDebugPanelOpen = ref(false)
 const cameraView = ref<'front' | 'perspective'>('front')
 const settings = reactive({
-  logoMode: 'connected' as LogoMode,
   rotationX: -0.06,
   rotationY: 0,
   rotationZ: 2.67,
@@ -36,15 +33,6 @@ const settings = reactive({
   particleSizeVariation: 0.45,
   opacity: 0.67,
   logoBrightness: 1,
-  connectedNodeCount: 900,
-  connectedMaxDistance: 0.075,
-  connectedMaxNeighbors: 3,
-  connectedLineOpacity: 0.34,
-  connectedLineIntensity: 1.05,
-  connectedNodeSize: 0.009,
-  connectedWaveSpeed: 0.34,
-  connectedWaveAmplitude: 0.004,
-  connectedDepthSpread: 0.055,
   fieldRadius: 0.98,
   fieldDensity: 0.95,
   fieldTurbulence: 0.028,
@@ -93,7 +81,6 @@ const logoVertexShader = `
   uniform float uSizeAttenuation;
   uniform float uLogoDepthSpread;
   uniform float uSizeVariation;
-  uniform float uFinalBodyOpacity;
 
   varying float vDepthBrightness;
   varying float vTransitionProgress;
@@ -156,8 +143,7 @@ const logoVertexShader = `
     vFieldWarmMix = fieldWarmMix;
     float densityMask = step(densityRank, mix(uFieldDensity, 1.0, easedProgress));
     float fieldAlpha = uFieldIntensity * uFieldVisibility;
-    float finalBodyFade = mix(1.0, uFinalBodyOpacity, smoothstep(0.55, 1.0, easedProgress));
-    vStateAlpha = densityMask * mix(fieldAlpha, 1.0, easedProgress) * finalBodyFade;
+    vStateAlpha = densityMask * mix(fieldAlpha, 1.0, easedProgress);
     gl_Position = projectionMatrix * modelViewPosition;
     float stateSize = mix(0.72, 1.0, easedProgress);
     gl_PointSize = clamp(uPointSize * uViewportHeight * 0.5 * individualSize * perspectiveScale * stateSize, 0.75, 8.0);
@@ -235,117 +221,17 @@ const ambientFragmentShader = `
   }
 `
 
-const connectedNodeVertexShader = `
-  attribute vec3 motionDirection;
-  attribute float phase;
-  attribute float sizeVariation;
-
-  uniform float uTime;
-  uniform float uTransitionProgress;
-  uniform float uWaveSpeed;
-  uniform float uWaveAmplitude;
-  uniform float uDepthSpread;
-  uniform float uPointSize;
-  uniform float uViewportHeight;
-  uniform float uSizeAttenuation;
-
-  varying float vAlpha;
-  varying float vBrightness;
-
-  void main() {
-    float slowWave = sin(uTime * uWaveSpeed + phase);
-    float secondaryWave = sin(uTime * uWaveSpeed * 0.61 + phase * 1.73) * 0.35;
-    vec3 animatedPosition = position + motionDirection * (slowWave + secondaryWave) * uWaveAmplitude;
-    animatedPosition.y += motionDirection.y * uDepthSpread;
-    vec4 modelViewPosition = modelViewMatrix * vec4(animatedPosition, 1.0);
-    float cameraDepth = max(0.18, -modelViewPosition.z);
-    float perspectiveScale = mix(1.0, 1.0 / cameraDepth, uSizeAttenuation);
-    float reveal = smoothstep(0.38, 0.94, uTransitionProgress);
-    vAlpha = reveal;
-    vBrightness = clamp(0.82 + perspectiveScale * 0.16, 0.82, 1.18);
-    gl_Position = projectionMatrix * modelViewPosition;
-    gl_PointSize = clamp(uPointSize * uViewportHeight * sizeVariation * perspectiveScale, 1.0, 7.0);
-  }
-`
-
-const connectedNodeFragmentShader = `
-  uniform vec3 uColor;
-  uniform float uOpacity;
-  uniform float uIntensity;
-
-  varying float vAlpha;
-  varying float vBrightness;
-
-  void main() {
-    float distanceToCenter = distance(gl_PointCoord, vec2(0.5));
-    float core = 1.0 - smoothstep(0.12, 0.32, distanceToCenter);
-    float halo = 1.0 - smoothstep(0.28, 0.50, distanceToCenter);
-    float particleAlpha = min(1.0, core + halo * 0.28);
-    if (particleAlpha <= 0.0) discard;
-    gl_FragColor = vec4(uColor * uIntensity * vBrightness, uOpacity * vAlpha * particleAlpha);
-  }
-`
-
-const connectedLineVertexShader = `
-  attribute vec3 motionDirection;
-  attribute float phase;
-  attribute float edgeStrength;
-
-  uniform float uTime;
-  uniform float uTransitionProgress;
-  uniform float uWaveSpeed;
-  uniform float uWaveAmplitude;
-  uniform float uDepthSpread;
-  uniform float uLineOpacity;
-
-  varying float vAlpha;
-  varying float vBrightness;
-
-  void main() {
-    float slowWave = sin(uTime * uWaveSpeed + phase);
-    float secondaryWave = sin(uTime * uWaveSpeed * 0.61 + phase * 1.73) * 0.35;
-    vec3 animatedPosition = position + motionDirection * (slowWave + secondaryWave) * uWaveAmplitude;
-    animatedPosition.y += motionDirection.y * uDepthSpread;
-    vec4 modelViewPosition = modelViewMatrix * vec4(animatedPosition, 1.0);
-    float cameraDepth = max(0.18, -modelViewPosition.z);
-    float reveal = smoothstep(0.44, 1.0, uTransitionProgress);
-    vAlpha = uLineOpacity * edgeStrength * reveal;
-    vBrightness = clamp(0.82 + 0.12 / cameraDepth, 0.82, 1.18);
-    gl_Position = projectionMatrix * modelViewPosition;
-  }
-`
-
-const connectedLineFragmentShader = `
-  uniform vec3 uColor;
-  uniform float uIntensity;
-
-  varying float vAlpha;
-  varying float vBrightness;
-
-  void main() {
-    gl_FragColor = vec4(uColor * uIntensity * vBrightness, vAlpha);
-  }
-`
-
 let renderer: THREE.WebGLRenderer | undefined
-let threeModule: typeof THREE | undefined
 let scene: THREE.Scene | undefined
 let camera: THREE.PerspectiveCamera | undefined
 let logoGeometry: THREE.BufferGeometry | undefined
 let logoMaterial: THREE.ShaderMaterial | undefined
 let ambientGeometry: THREE.BufferGeometry | undefined
 let ambientMaterial: THREE.ShaderMaterial | undefined
-let connectedNodeGeometry: THREE.BufferGeometry | undefined
-let connectedNodeMaterial: THREE.ShaderMaterial | undefined
-let connectedLineGeometry: THREE.BufferGeometry | undefined
-let connectedLineMaterial: THREE.ShaderMaterial | undefined
 let resizeObserver: ResizeObserver | undefined
 let reducedMotionQuery: MediaQueryList | undefined
 let logoPoints: THREE.Points | undefined
 let ambientPoints: THREE.Points | undefined
-let connectedNodes: THREE.Points | undefined
-let connectedLines: THREE.LineSegments | undefined
-let connectedGroup: THREE.Group | undefined
 let axesHelper: THREE.AxesHelper | undefined
 let gridHelper: THREE.GridHelper | undefined
 let transitionStartTime = 0
@@ -358,8 +244,6 @@ let pointerTargetX = 0
 let pointerTargetY = 0
 let cursorTiltX = 0
 let cursorTiltZ = 0
-let graphRebuildTimer: ReturnType<typeof setTimeout> | undefined
-let graphSignature = ''
 
 /** CPU-side position sets stay isolated so a future morph can replace the target safely. */
 let fieldPositions: Float32Array | undefined
@@ -367,7 +251,6 @@ let currentPositions: Float32Array | undefined
 let targetPositions: Float32Array | undefined
 const transitionProgress = ref(0)
 const particleState = ref<ParticleState>('field')
-const connectedEdgeCount = ref(0)
 const transitionDelay = 0.9
 
 function renderScene() {
@@ -385,12 +268,6 @@ function animate(time: number) {
   if (particleState.value !== nextState) particleState.value = nextState
   logoMaterial.uniforms.uTime!.value = time / 1000
   logoMaterial.uniforms.uTransitionProgress!.value = activeProgress
-  if (connectedNodeMaterial && connectedLineMaterial) {
-    connectedNodeMaterial.uniforms.uTime!.value = time / 1000
-    connectedNodeMaterial.uniforms.uTransitionProgress!.value = activeProgress
-    connectedLineMaterial.uniforms.uTime!.value = time / 1000
-    connectedLineMaterial.uniforms.uTransitionProgress!.value = activeProgress
-  }
   if (!transitionOverride && (time - lastProgressUiUpdate > 50 || activeProgress >= 1)) {
     transitionProgress.value = activeProgress
     lastProgressUiUpdate = time
@@ -417,50 +294,6 @@ function createRandom(seed: number) {
   }
 }
 
-function getGraphSignature() {
-  return `${Math.round(settings.connectedNodeCount)}:${settings.connectedMaxDistance.toFixed(4)}:${Math.round(settings.connectedMaxNeighbors)}`
-}
-
-function rebuildConnectedGraph() {
-  if (!threeModule || !targetPositions) return
-  const graph = buildConnectedParticleGraph(targetPositions, {
-    nodeCount: settings.connectedNodeCount,
-    maxConnectionDistance: settings.connectedMaxDistance,
-    maxNeighbors: settings.connectedMaxNeighbors,
-  })
-
-  const nextNodeGeometry = new threeModule.BufferGeometry()
-  nextNodeGeometry.setAttribute('position', new threeModule.BufferAttribute(graph.nodePositions, 3))
-  nextNodeGeometry.setAttribute('phase', new threeModule.BufferAttribute(graph.nodePhases, 1))
-  nextNodeGeometry.setAttribute('motionDirection', new threeModule.BufferAttribute(graph.nodeDirections, 3))
-  nextNodeGeometry.setAttribute('sizeVariation', new threeModule.BufferAttribute(graph.nodeSizes, 1))
-
-  const nextLineGeometry = new threeModule.BufferGeometry()
-  nextLineGeometry.setAttribute('position', new threeModule.BufferAttribute(graph.linePositions, 3))
-  nextLineGeometry.setAttribute('phase', new threeModule.BufferAttribute(graph.linePhases, 1))
-  nextLineGeometry.setAttribute('motionDirection', new threeModule.BufferAttribute(graph.lineDirections, 3))
-  nextLineGeometry.setAttribute('edgeStrength', new threeModule.BufferAttribute(graph.lineStrengths, 1))
-
-  connectedNodeGeometry?.dispose()
-  connectedLineGeometry?.dispose()
-  connectedNodeGeometry = nextNodeGeometry
-  connectedLineGeometry = nextLineGeometry
-  if (connectedNodes) connectedNodes.geometry = nextNodeGeometry
-  if (connectedLines) connectedLines.geometry = nextLineGeometry
-  connectedEdgeCount.value = graph.edgeCount
-  graphSignature = getGraphSignature()
-}
-
-function scheduleConnectedGraphRebuild() {
-  if (getGraphSignature() === graphSignature || !targetPositions) return
-  if (graphRebuildTimer) clearTimeout(graphRebuildTimer)
-  graphRebuildTimer = setTimeout(() => {
-    graphRebuildTimer = undefined
-    rebuildConnectedGraph()
-    if (reducedMotion) renderScene()
-  }, 140)
-}
-
 function updateCamera() {
   if (!camera) return
 
@@ -477,14 +310,15 @@ function updateCamera() {
 }
 
 function applyParticleTransforms() {
-  const rotationX = settings.rotationX + cursorTiltX
-  const rotationZ = settings.rotationZ + cursorTiltZ
-  logoPoints?.rotation.set(rotationX, settings.rotationY, rotationZ)
-  logoPoints?.scale.setScalar(settings.scale)
-  if (logoPoints) logoPoints.position.z = settings.verticalOffset
-  connectedGroup?.rotation.set(rotationX, settings.rotationY, rotationZ)
-  connectedGroup?.scale.setScalar(settings.scale)
-  if (connectedGroup) connectedGroup.position.z = settings.verticalOffset
+  if (logoPoints) {
+    logoPoints.rotation.set(
+      settings.rotationX + cursorTiltX,
+      settings.rotationY,
+      settings.rotationZ + cursorTiltZ,
+    )
+    logoPoints.scale.setScalar(settings.scale)
+    logoPoints.position.z = settings.verticalOffset
+  }
   if (ambientPoints) {
     ambientPoints.rotation.set(cursorTiltX * 0.7, 0, cursorTiltZ * 0.7)
   }
@@ -537,7 +371,6 @@ function applySettings() {
     logoMaterial.uniforms.uTurbulenceStrength!.value = settings.turbulenceStrength
     logoMaterial.uniforms.uIdleStrength!.value = reducedMotion ? 0 : settings.idleStrength
     logoMaterial.uniforms.uBrightness!.value = settings.logoBrightness
-    logoMaterial.uniforms.uFinalBodyOpacity!.value = settings.logoMode === 'connected' ? 0.2 : 1
   }
   if (ambientMaterial) {
     ambientMaterial.uniforms.uSizeAttenuation!.value = settings.sizeAttenuation
@@ -545,23 +378,6 @@ function applySettings() {
     ambientMaterial.uniforms.uSizeVariation!.value = settings.particleSizeVariation
     ambientMaterial.uniforms.uOpacity!.value = settings.ambientIntensity
   }
-  if (connectedNodeMaterial) {
-    connectedNodeMaterial.uniforms.uWaveSpeed!.value = reducedMotion ? 0 : settings.connectedWaveSpeed
-    connectedNodeMaterial.uniforms.uWaveAmplitude!.value = reducedMotion ? 0 : settings.connectedWaveAmplitude
-    connectedNodeMaterial.uniforms.uDepthSpread!.value = settings.connectedDepthSpread
-    connectedNodeMaterial.uniforms.uPointSize!.value = settings.connectedNodeSize
-    connectedNodeMaterial.uniforms.uSizeAttenuation!.value = settings.sizeAttenuation
-    connectedNodeMaterial.uniforms.uIntensity!.value = settings.connectedLineIntensity
-  }
-  if (connectedLineMaterial) {
-    connectedLineMaterial.uniforms.uWaveSpeed!.value = reducedMotion ? 0 : settings.connectedWaveSpeed
-    connectedLineMaterial.uniforms.uWaveAmplitude!.value = reducedMotion ? 0 : settings.connectedWaveAmplitude
-    connectedLineMaterial.uniforms.uDepthSpread!.value = settings.connectedDepthSpread
-    connectedLineMaterial.uniforms.uLineOpacity!.value = settings.connectedLineOpacity
-    connectedLineMaterial.uniforms.uIntensity!.value = settings.connectedLineIntensity
-  }
-  if (connectedGroup) connectedGroup.visible = settings.logoMode === 'connected'
-  scheduleConnectedGraphRebuild()
   emit('cardsVisibilityChange', settings.hideCards)
   if (ambientPoints) ambientPoints.visible = settings.ambientVisible && !reducedMotion
   if (axesHelper) axesHelper.visible = settings.showAxes
@@ -582,8 +398,6 @@ function restartIntro() {
   particleState.value = 'field'
   transitionStartTime = performance.now()
   logoMaterial.uniforms.uTransitionProgress!.value = 0
-  if (connectedNodeMaterial) connectedNodeMaterial.uniforms.uTransitionProgress!.value = 0
-  if (connectedLineMaterial) connectedLineMaterial.uniforms.uTransitionProgress!.value = 0
 }
 
 function setTransitionProgress(event: Event) {
@@ -592,8 +406,6 @@ function setTransitionProgress(event: Event) {
   transitionProgress.value = Number(input.value)
   particleState.value = transitionProgress.value <= 0 ? 'field' : transitionProgress.value >= 1 ? 'logo' : 'transition'
   if (logoMaterial) logoMaterial.uniforms.uTransitionProgress!.value = transitionProgress.value
-  if (connectedNodeMaterial) connectedNodeMaterial.uniforms.uTransitionProgress!.value = transitionProgress.value
-  if (connectedLineMaterial) connectedLineMaterial.uniforms.uTransitionProgress!.value = transitionProgress.value
   if (reducedMotion) renderScene()
 }
 
@@ -612,7 +424,6 @@ function resize() {
   camera.updateProjectionMatrix()
   if (logoMaterial) logoMaterial.uniforms.uViewportHeight!.value = height * pixelRatio
   if (ambientMaterial) ambientMaterial.uniforms.uViewportHeight!.value = height * pixelRatio
-  if (connectedNodeMaterial) connectedNodeMaterial.uniforms.uViewportHeight!.value = height * pixelRatio
   if (reducedMotion) renderScene()
 }
 
@@ -627,8 +438,6 @@ function handleReducedMotion(event: MediaQueryListEvent) {
     logoMaterial.uniforms.uTransitionProgress!.value = reducedMotion ? 1 : 0
     logoMaterial.uniforms.uIdleStrength!.value = reducedMotion ? 0 : settings.idleStrength
   }
-  if (connectedNodeMaterial) connectedNodeMaterial.uniforms.uTransitionProgress!.value = reducedMotion ? 1 : 0
-  if (connectedLineMaterial) connectedLineMaterial.uniforms.uTransitionProgress!.value = reducedMotion ? 1 : 0
   transitionOverride = false
   transitionProgress.value = reducedMotion ? 1 : 0
   particleState.value = reducedMotion ? 'logo' : 'field'
@@ -640,8 +449,6 @@ function handleReducedMotion(event: MediaQueryListEvent) {
 
 function dispose() {
   disposed = true
-  if (graphRebuildTimer) clearTimeout(graphRebuildTimer)
-  graphRebuildTimer = undefined
   resizeObserver?.disconnect()
   reducedMotionQuery?.removeEventListener('change', handleReducedMotion)
   window.removeEventListener('pointermove', handlePointerMove)
@@ -658,10 +465,6 @@ function dispose() {
   logoMaterial?.dispose()
   ambientGeometry?.dispose()
   ambientMaterial?.dispose()
-  connectedNodeGeometry?.dispose()
-  connectedNodeMaterial?.dispose()
-  connectedLineGeometry?.dispose()
-  connectedLineMaterial?.dispose()
   renderer?.dispose()
   renderer = undefined
   scene = undefined
@@ -670,23 +473,13 @@ function dispose() {
   logoMaterial = undefined
   ambientGeometry = undefined
   ambientMaterial = undefined
-  connectedNodeGeometry = undefined
-  connectedNodeMaterial = undefined
-  connectedLineGeometry = undefined
-  connectedLineMaterial = undefined
   logoPoints = undefined
   ambientPoints = undefined
-  connectedNodes = undefined
-  connectedLines = undefined
-  connectedGroup = undefined
   axesHelper = undefined
   gridHelper = undefined
   currentPositions = undefined
   fieldPositions = undefined
   targetPositions = undefined
-  threeModule = undefined
-  graphSignature = ''
-  connectedEdgeCount.value = 0
   transitionOverride = false
   transitionProgress.value = 0
   particleState.value = 'field'
@@ -708,7 +501,6 @@ onMounted(async () => {
     if (!response.ok) throw new Error(`Unable to load LD logo particle data: ${response.status}`)
     const data = await response.json() as PointData
     if (disposed || !canvas.value) return
-    threeModule = three
 
     const sessionSeed = crypto.getRandomValues(new Uint32Array(1))[0] ?? Date.now()
     const random = createRandom(sessionSeed)
@@ -786,7 +578,6 @@ onMounted(async () => {
         uSizeAttenuation: { value: settings.sizeAttenuation },
         uLogoDepthSpread: { value: settings.logoDepthSpread },
         uSizeVariation: { value: settings.particleSizeVariation },
-        uFinalBodyOpacity: { value: settings.logoMode === 'connected' ? 0.2 : 1 },
         uFieldColor: { value: new three.Color('#e4e9e7') },
         uColor: { value: new three.Color(accentColor) },
         uOpacity: { value: settings.opacity },
@@ -801,57 +592,6 @@ onMounted(async () => {
     logoPoints.frustumCulled = false
     logoPoints.renderOrder = 1
     scene.add(logoPoints)
-
-    rebuildConnectedGraph()
-    connectedNodeMaterial = new three.ShaderMaterial({
-      vertexShader: connectedNodeVertexShader,
-      fragmentShader: connectedNodeFragmentShader,
-      uniforms: {
-        uTime: { value: 0 },
-        uTransitionProgress: { value: 0 },
-        uWaveSpeed: { value: settings.connectedWaveSpeed },
-        uWaveAmplitude: { value: settings.connectedWaveAmplitude },
-        uDepthSpread: { value: settings.connectedDepthSpread },
-        uPointSize: { value: settings.connectedNodeSize },
-        uViewportHeight: { value: 1 },
-        uSizeAttenuation: { value: settings.sizeAttenuation },
-        uColor: { value: new three.Color(accentColor) },
-        uOpacity: { value: 0.9 },
-        uIntensity: { value: settings.connectedLineIntensity },
-      },
-      transparent: true,
-      depthWrite: false,
-      depthTest: false,
-      blending: three.AdditiveBlending,
-    })
-    connectedLineMaterial = new three.ShaderMaterial({
-      vertexShader: connectedLineVertexShader,
-      fragmentShader: connectedLineFragmentShader,
-      uniforms: {
-        uTime: { value: 0 },
-        uTransitionProgress: { value: 0 },
-        uWaveSpeed: { value: settings.connectedWaveSpeed },
-        uWaveAmplitude: { value: settings.connectedWaveAmplitude },
-        uDepthSpread: { value: settings.connectedDepthSpread },
-        uLineOpacity: { value: settings.connectedLineOpacity },
-        uColor: { value: new three.Color(accentColor) },
-        uIntensity: { value: settings.connectedLineIntensity },
-      },
-      transparent: true,
-      depthWrite: false,
-      depthTest: false,
-      blending: three.AdditiveBlending,
-    })
-    connectedNodes = new three.Points(connectedNodeGeometry, connectedNodeMaterial)
-    connectedLines = new three.LineSegments(connectedLineGeometry, connectedLineMaterial)
-    connectedNodes.frustumCulled = false
-    connectedLines.frustumCulled = false
-    connectedNodes.renderOrder = 3
-    connectedLines.renderOrder = 2
-    connectedGroup = new three.Group()
-    connectedGroup.add(connectedLines, connectedNodes)
-    connectedGroup.visible = settings.logoMode === 'connected'
-    scene.add(connectedGroup)
 
     const ambientCount = 960
     const ambientPositions = new Float32Array(ambientCount * 3)
@@ -915,8 +655,6 @@ onMounted(async () => {
     reducedMotionQuery = window.matchMedia('(prefers-reduced-motion: reduce)')
     reducedMotion = reducedMotionQuery.matches
     logoMaterial.uniforms.uTransitionProgress!.value = reducedMotion ? 1 : 0
-    connectedNodeMaterial.uniforms.uTransitionProgress!.value = reducedMotion ? 1 : 0
-    connectedLineMaterial.uniforms.uTransitionProgress!.value = reducedMotion ? 1 : 0
     reducedMotionQuery.addEventListener('change', handleReducedMotion)
     window.addEventListener('pointermove', handlePointerMove, { passive: true })
     window.addEventListener('blur', resetCursorTilt)
@@ -949,15 +687,6 @@ onBeforeUnmount(dispose)
           {{ isDebugPanelOpen ? 'Hide particle controls' : 'Particle controls' }}
         </button>
         <div v-if="isDebugPanelOpen" class="particle-debug__panel">
-          <div class="particle-debug__group">
-            <h2>Logo mode</h2>
-            <label>Renderer
-              <select v-model="settings.logoMode">
-                <option value="classic">Classic</option>
-                <option value="connected">Connected</option>
-              </select>
-            </label>
-          </div>
           <div class="particle-debug__group">
             <h2>Transform</h2>
             <label>Rotation X <output>{{ settings.rotationX.toFixed(2) }}</output><input v-model.number="settings.rotationX" type="range" min="-3.14" max="3.14" step="0.01" /></label>
@@ -1003,19 +732,6 @@ onBeforeUnmount(dispose)
             <label>Logo brightness <output>{{ settings.logoBrightness.toFixed(2) }}</output><input v-model.number="settings.logoBrightness" type="range" min="0.5" max="1.5" step="0.01" /></label>
             <label class="particle-debug__check"><input v-model="settings.ambientVisible" type="checkbox" /> Ambient particles</label>
           </div>
-          <div v-if="settings.logoMode === 'connected'" class="particle-debug__group">
-            <h2>Connected network</h2>
-            <p class="particle-debug__meta">{{ settings.connectedNodeCount }} nodes · {{ connectedEdgeCount }} edges</p>
-            <label>Graph node count <output>{{ settings.connectedNodeCount }}</output><input v-model.number="settings.connectedNodeCount" type="range" min="600" max="1500" step="50" /></label>
-            <label>Max connection distance <output>{{ settings.connectedMaxDistance.toFixed(3) }}</output><input v-model.number="settings.connectedMaxDistance" type="range" min="0.035" max="0.14" step="0.005" /></label>
-            <label>Max neighbors <output>{{ settings.connectedMaxNeighbors }}</output><input v-model.number="settings.connectedMaxNeighbors" type="range" min="1" max="6" step="1" /></label>
-            <label>Line opacity <output>{{ settings.connectedLineOpacity.toFixed(2) }}</output><input v-model.number="settings.connectedLineOpacity" type="range" min="0" max="1" step="0.01" /></label>
-            <label>Line intensity <output>{{ settings.connectedLineIntensity.toFixed(2) }}</output><input v-model.number="settings.connectedLineIntensity" type="range" min="0.25" max="2" step="0.05" /></label>
-            <label>Node size <output>{{ settings.connectedNodeSize.toFixed(3) }}</output><input v-model.number="settings.connectedNodeSize" type="range" min="0.002" max="0.02" step="0.001" /></label>
-            <label>Wave speed <output>{{ settings.connectedWaveSpeed.toFixed(2) }}</output><input v-model.number="settings.connectedWaveSpeed" type="range" min="0" max="1.2" step="0.02" /></label>
-            <label>Wave amplitude <output>{{ settings.connectedWaveAmplitude.toFixed(3) }}</output><input v-model.number="settings.connectedWaveAmplitude" type="range" min="0" max="0.02" step="0.001" /></label>
-            <label>Depth spread <output>{{ settings.connectedDepthSpread.toFixed(3) }}</output><input v-model.number="settings.connectedDepthSpread" type="range" min="0" max="0.15" step="0.005" /></label>
-          </div>
           <div class="particle-debug__group">
             <h2>Card hover</h2>
             <label>Glow size <output>{{ settings.cardHoverGlowSize.toFixed(1) }} px</output><input v-model.number="settings.cardHoverGlowSize" type="range" min="160" max="560" step="0.1" /></label>
@@ -1046,8 +762,6 @@ onBeforeUnmount(dispose)
 .particle-debug h2 { margin: 0; color: #9debe7; font-size: 10px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; }
 .particle-debug label { display: grid; grid-template-columns: 1fr auto; gap: 5px 8px; align-items: center; }
 .particle-debug output { color: #9debe7; font-variant-numeric: tabular-nums; }
-.particle-debug select { min-width: 118px; padding: 5px 7px; border: 1px solid rgb(157 235 231 / 35%); border-radius: 4px; background: #141d1e; color: inherit; }
-.particle-debug__meta { margin: 0; color: rgb(232 245 245 / 65%); font-size: 11px; font-variant-numeric: tabular-nums; }
 .particle-debug input[type='range'] { grid-column: 1 / -1; width: 100%; accent-color: #9debe7; }
 .particle-debug__actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .particle-debug__actions button, .particle-debug__wide-action { padding: 6px; border: 1px solid rgb(157 235 231 / 35%); border-radius: 4px; background: transparent; color: inherit; cursor: pointer; }
