@@ -7,7 +7,7 @@ interface PointData {
   positions: Array<{ x: number, y: number, z: number }>
 }
 
-type ParticleState = 'galaxy' | 'transition' | 'logo'
+type ParticleState = 'field' | 'transition' | 'logo'
 
 const emit = defineEmits<{
   introStart: [reducedMotion: boolean]
@@ -33,16 +33,18 @@ const settings = reactive({
   particleSizeVariation: 0.45,
   opacity: 0.67,
   logoBrightness: 1,
-  galaxyRadius: 0.68,
-  galaxyRotationSpeed: 0.08,
-  galaxyTurbulence: 0.018,
+  fieldRadius: 0.98,
+  fieldDensity: 0.95,
+  fieldTurbulence: 0.028,
+  fieldStrength: 0.034,
   transitionDuration: 1.05,
-  fieldIntensity: 0.78,
+  fieldIntensity: 0.88,
   ambientIntensity: 0.18,
   flowStrength: 0.24,
   turbulenceStrength: 0.055,
   idleStrength: 0.002,
   cursorTiltStrength: 0.025,
+  fieldVisible: true,
   ambientVisible: true,
   cardHoverGlowSize: 397.4,
   cardHoverGlowOpacity: 0.35,
@@ -55,17 +57,22 @@ const settings = reactive({
 })
 
 const logoVertexShader = `
-  attribute vec3 galaxyPosition;
+  attribute vec3 fieldPosition;
   attribute vec3 randomSeed;
   attribute float phase;
   attribute float delay;
   attribute float sizeVariation;
+  attribute float densityRank;
+  attribute float fieldWarmMix;
 
   uniform float uTime;
   uniform float uTransitionProgress;
-  uniform float uGalaxyRadius;
-  uniform float uGalaxyRotationSpeed;
-  uniform float uGalaxyTurbulence;
+  uniform float uFieldRadius;
+  uniform float uFieldDensity;
+  uniform float uFieldTurbulence;
+  uniform float uFieldStrength;
+  uniform float uFieldIntensity;
+  uniform float uFieldVisibility;
   uniform float uFlowStrength;
   uniform float uTurbulenceStrength;
   uniform float uIdleStrength;
@@ -77,6 +84,8 @@ const logoVertexShader = `
 
   varying float vDepthBrightness;
   varying float vTransitionProgress;
+  varying float vFieldWarmMix;
+  varying float vStateAlpha;
 
   float easeOutCubic(float value) {
     float inverse = 1.0 - value;
@@ -101,20 +110,21 @@ const logoVertexShader = `
       sin(phase * 2.7 + localProgress * 15.0)
     ) * uTurbulenceStrength * turbulenceWindow;
 
-    vec3 scaledGalaxyPosition = galaxyPosition * uGalaxyRadius;
-    float orbitalSpeed = uGalaxyRotationSpeed * (0.55 + abs(randomSeed.y) * 0.65);
-    float orbitalAngle = uTime * orbitalSpeed;
-    float orbitalCos = cos(orbitalAngle);
-    float orbitalSin = sin(orbitalAngle);
-    vec2 orbitalPosition = mat2(orbitalCos, -orbitalSin, orbitalSin, orbitalCos) * scaledGalaxyPosition.xz;
-    vec3 animatedGalaxyPosition = vec3(orbitalPosition.x, scaledGalaxyPosition.y, orbitalPosition.y);
-    animatedGalaxyPosition += vec3(
-      sin(uTime * 0.31 + phase * 1.7),
-      cos(uTime * 0.27 + phase * 1.13),
-      sin(uTime * 0.29 + phase * 1.41)
-    ) * uGalaxyTurbulence * (1.0 - easedProgress);
+    vec3 scaledFieldPosition = fieldPosition * uFieldRadius;
+    float fieldEnvelope = 1.0 - easedProgress;
+    vec3 directionalDrift = vec3(
+      0.7 + randomSeed.x * 0.3,
+      randomSeed.y * 0.45,
+      -0.24 + randomSeed.z * 0.28
+    ) * sin(uTime * 0.22 + phase) * uFieldStrength;
+    vec3 organicMotion = vec3(
+      sin(uTime * 0.37 + phase * 1.7),
+      cos(uTime * 0.29 + phase * 1.13),
+      sin(uTime * 0.33 + phase * 1.41)
+    ) * uFieldTurbulence;
+    vec3 animatedFieldPosition = scaledFieldPosition + (directionalDrift + organicMotion) * fieldEnvelope;
 
-    vec3 animatedPosition = mix(animatedGalaxyPosition, position, easedProgress) + curvedFlow + turbulence;
+    vec3 animatedPosition = mix(animatedFieldPosition, position, easedProgress) + curvedFlow + turbulence;
     float idleEnvelope = smoothstep(0.72, 1.0, uTransitionProgress);
     vec3 idleOffset = vec3(
       sin(uTime * 0.72 + phase),
@@ -130,20 +140,26 @@ const logoVertexShader = `
     float individualSize = mix(1.0, sizeVariation, uSizeVariation);
     vDepthBrightness = clamp(0.86 + perspectiveScale * 0.14, 0.86, 1.12);
     vTransitionProgress = easedProgress;
+    vFieldWarmMix = fieldWarmMix;
+    float densityMask = step(densityRank, mix(uFieldDensity, 1.0, easedProgress));
+    float fieldAlpha = uFieldIntensity * uFieldVisibility;
+    vStateAlpha = densityMask * mix(fieldAlpha, 1.0, easedProgress);
     gl_Position = projectionMatrix * modelViewPosition;
-    float stateSize = mix(0.62, 1.0, easedProgress);
+    float stateSize = mix(0.72, 1.0, easedProgress);
     gl_PointSize = clamp(uPointSize * uViewportHeight * 0.5 * individualSize * perspectiveScale * stateSize, 0.75, 8.0);
   }
 `
 
 const logoFragmentShader = `
-  uniform vec3 uGalaxyColor;
+  uniform vec3 uFieldColor;
   uniform vec3 uColor;
   uniform float uOpacity;
   uniform float uBrightness;
 
   varying float vDepthBrightness;
   varying float vTransitionProgress;
+  varying float vFieldWarmMix;
+  varying float vStateAlpha;
 
   void main() {
     float distanceToCenter = distance(gl_PointCoord, vec2(0.5));
@@ -151,8 +167,9 @@ const logoFragmentShader = `
     float halo = 1.0 - smoothstep(0.34, 0.50, distanceToCenter);
     float particleAlpha = min(1.0, core + halo * 0.20);
     if (particleAlpha <= 0.0) discard;
-    vec3 particleColor = mix(uGalaxyColor, uColor, smoothstep(0.12, 0.92, vTransitionProgress));
-    gl_FragColor = vec4(particleColor * uBrightness * vDepthBrightness, uOpacity * particleAlpha);
+    vec3 fieldColor = mix(uFieldColor, uColor, vFieldWarmMix);
+    vec3 particleColor = mix(fieldColor, uColor, smoothstep(0.12, 0.92, vTransitionProgress));
+    gl_FragColor = vec4(particleColor * uBrightness * vDepthBrightness, uOpacity * vStateAlpha * particleAlpha);
   }
 `
 
@@ -172,15 +189,10 @@ const ambientVertexShader = `
   varying float vDepthBrightness;
 
   void main() {
-    float orbitSpeed = 0.012 + (sin(phase * 1.37) * 0.5 + 0.5) * 0.018;
-    float orbitAngle = uTime * orbitSpeed;
-    float orbitCos = cos(orbitAngle);
-    float orbitSin = sin(orbitAngle);
-    vec2 orbitPosition = mat2(orbitCos, -orbitSin, orbitSin, orbitCos) * position.xy;
-    vec3 animatedPosition = vec3(orbitPosition, position.z) + vec3(
-      sin(uTime * 0.13 + phase) * drift.x,
+    vec3 animatedPosition = position + vec3(
+      sin(uTime * 0.13 + phase) * drift.x + sin(uTime * 0.07 + phase * 0.37) * drift.x * 1.6,
       cos(uTime * 0.11 + phase * 1.17) * drift.y,
-      sin(uTime * 0.09 + phase * 0.83) * drift.z
+      sin(uTime * 0.09 + phase * 0.83) * drift.z - cos(uTime * 0.06 + phase * 0.41) * drift.z * 0.8
     );
     vec4 modelViewPosition = modelViewMatrix * vec4(animatedPosition, 1.0);
     modelViewPosition.z += depthSeed * uAmbientDepthSpread;
@@ -209,68 +221,6 @@ const ambientFragmentShader = `
   }
 `
 
-const orbitVertexShader = `
-  attribute vec3 drift;
-  attribute float phase;
-  attribute float orbitSpeed;
-  attribute float sizeVariation;
-  attribute float warmMix;
-
-  uniform float uTime;
-  uniform float uTransitionProgress;
-  uniform float uPointSize;
-  uniform float uViewportHeight;
-  uniform float uFieldIntensity;
-
-  varying float vBrightness;
-  varying float vWarmMix;
-  varying float vAlpha;
-
-  void main() {
-    float angle = uTime * orbitSpeed;
-    float orbitCos = cos(angle);
-    float orbitSin = sin(angle);
-    vec2 rotated = mat2(orbitCos, -orbitSin, orbitSin, orbitCos) * position.xz;
-    float energyPulse = sin(phase * 2.0 + uTime * 1.4) * 0.5 + 0.5;
-    vec3 animatedPosition = vec3(rotated.x, position.y, rotated.y) + vec3(
-      sin(uTime * 0.24 + phase) * drift.x,
-      cos(uTime * 0.19 + phase * 1.31) * drift.y,
-      sin(uTime * 0.22 + phase * 0.83) * drift.z
-    );
-    animatedPosition *= mix(1.0, 0.94, smoothstep(0.0, 1.0, uTransitionProgress));
-
-    vec4 modelViewPosition = modelViewMatrix * vec4(animatedPosition, 1.0);
-    float cameraDepth = max(0.2, -modelViewPosition.z);
-    float depthScale = clamp(1.0 / cameraDepth, 0.72, 1.8);
-    vBrightness = mix(0.92, 1.62, energyPulse) * mix(0.92, 1.08, uTransitionProgress);
-    vWarmMix = warmMix;
-    vAlpha = uFieldIntensity * mix(0.76, 1.0, energyPulse);
-    gl_Position = projectionMatrix * modelViewPosition;
-    gl_PointSize = clamp(uPointSize * uViewportHeight * sizeVariation * depthScale, 0.8, 7.0);
-  }
-`
-
-const orbitFragmentShader = `
-  uniform vec3 uLightColor;
-  uniform vec3 uWarmColor;
-  uniform float uTransitionProgress;
-
-  varying float vBrightness;
-  varying float vWarmMix;
-  varying float vAlpha;
-
-  void main() {
-    float distanceToCenter = distance(gl_PointCoord, vec2(0.5));
-    float core = 1.0 - smoothstep(0.06, 0.25, distanceToCenter);
-    float halo = 1.0 - smoothstep(0.18, 0.50, distanceToCenter);
-    float particleAlpha = min(1.0, core + halo * 0.48);
-    if (particleAlpha <= 0.0) discard;
-    float finalWarmMix = vWarmMix * mix(0.28, 0.48, uTransitionProgress);
-    vec3 particleColor = mix(uLightColor, uWarmColor, finalWarmMix);
-    gl_FragColor = vec4(particleColor * vBrightness, vAlpha * particleAlpha);
-  }
-`
-
 let renderer: THREE.WebGLRenderer | undefined
 let scene: THREE.Scene | undefined
 let camera: THREE.PerspectiveCamera | undefined
@@ -278,13 +228,10 @@ let logoGeometry: THREE.BufferGeometry | undefined
 let logoMaterial: THREE.ShaderMaterial | undefined
 let ambientGeometry: THREE.BufferGeometry | undefined
 let ambientMaterial: THREE.ShaderMaterial | undefined
-let orbitGeometry: THREE.BufferGeometry | undefined
-let orbitMaterial: THREE.ShaderMaterial | undefined
 let resizeObserver: ResizeObserver | undefined
 let reducedMotionQuery: MediaQueryList | undefined
 let logoPoints: THREE.Points | undefined
 let ambientPoints: THREE.Points | undefined
-let orbitPoints: THREE.Points | undefined
 let axesHelper: THREE.AxesHelper | undefined
 let gridHelper: THREE.GridHelper | undefined
 let transitionStartTime = 0
@@ -299,11 +246,11 @@ let cursorTiltX = 0
 let cursorTiltZ = 0
 
 /** CPU-side position sets stay isolated so a future morph can replace the target safely. */
-let galaxyPositions: Float32Array | undefined
+let fieldPositions: Float32Array | undefined
 let currentPositions: Float32Array | undefined
 let targetPositions: Float32Array | undefined
 const transitionProgress = ref(0)
-const particleState = ref<ParticleState>('galaxy')
+const particleState = ref<ParticleState>('field')
 const transitionDelay = 0.9
 
 function renderScene() {
@@ -311,13 +258,13 @@ function renderScene() {
 }
 
 function animate(time: number) {
-  if (!renderer || !scene || !camera || !logoMaterial || !ambientMaterial || !orbitMaterial) return
+  if (!renderer || !scene || !camera || !logoMaterial || !ambientMaterial) return
   const deltaSeconds = lastFrameTime ? Math.min((time - lastFrameTime) / 1000, 0.05) : 0
   lastFrameTime = time
   const elapsedSeconds = Math.max(0, time - transitionStartTime) / 1000
   const automaticProgress = Math.max(0, Math.min(1, (elapsedSeconds - transitionDelay) / settings.transitionDuration))
   const activeProgress = transitionOverride ? transitionProgress.value : automaticProgress
-  const nextState: ParticleState = activeProgress <= 0 ? 'galaxy' : activeProgress >= 1 ? 'logo' : 'transition'
+  const nextState: ParticleState = activeProgress <= 0 ? 'field' : activeProgress >= 1 ? 'logo' : 'transition'
   if (particleState.value !== nextState) particleState.value = nextState
   logoMaterial.uniforms.uTime!.value = time / 1000
   logoMaterial.uniforms.uTransitionProgress!.value = activeProgress
@@ -326,8 +273,6 @@ function animate(time: number) {
     lastProgressUiUpdate = time
   }
   ambientMaterial.uniforms.uTime!.value = time / 1000
-  orbitMaterial.uniforms.uTime!.value = time / 1000
-  orbitMaterial.uniforms.uTransitionProgress!.value = activeProgress
   updateCursorTilt(deltaSeconds)
   renderer.render(scene, camera)
 }
@@ -377,9 +322,6 @@ function applyParticleTransforms() {
   if (ambientPoints) {
     ambientPoints.rotation.set(cursorTiltX * 0.7, 0, cursorTiltZ * 0.7)
   }
-  if (orbitPoints) {
-    orbitPoints.rotation.set(cursorTiltX * 0.42, 0, cursorTiltZ * 0.42)
-  }
 }
 
 function updateCursorTilt(deltaSeconds: number) {
@@ -419,9 +361,12 @@ function applySettings() {
     logoMaterial.uniforms.uLogoDepthSpread!.value = settings.logoDepthSpread
     logoMaterial.uniforms.uSizeVariation!.value = settings.particleSizeVariation
     logoMaterial.uniforms.uOpacity!.value = settings.opacity
-    logoMaterial.uniforms.uGalaxyRadius!.value = settings.galaxyRadius
-    logoMaterial.uniforms.uGalaxyRotationSpeed!.value = reducedMotion ? 0 : settings.galaxyRotationSpeed
-    logoMaterial.uniforms.uGalaxyTurbulence!.value = reducedMotion ? 0 : settings.galaxyTurbulence
+    logoMaterial.uniforms.uFieldRadius!.value = settings.fieldRadius
+    logoMaterial.uniforms.uFieldDensity!.value = settings.fieldDensity
+    logoMaterial.uniforms.uFieldTurbulence!.value = reducedMotion ? 0 : settings.fieldTurbulence
+    logoMaterial.uniforms.uFieldStrength!.value = reducedMotion ? 0 : settings.fieldStrength
+    logoMaterial.uniforms.uFieldIntensity!.value = settings.fieldIntensity
+    logoMaterial.uniforms.uFieldVisibility!.value = settings.fieldVisible ? 1 : 0
     logoMaterial.uniforms.uFlowStrength!.value = settings.flowStrength
     logoMaterial.uniforms.uTurbulenceStrength!.value = settings.turbulenceStrength
     logoMaterial.uniforms.uIdleStrength!.value = reducedMotion ? 0 : settings.idleStrength
@@ -433,7 +378,6 @@ function applySettings() {
     ambientMaterial.uniforms.uSizeVariation!.value = settings.particleSizeVariation
     ambientMaterial.uniforms.uOpacity!.value = settings.ambientIntensity
   }
-  if (orbitMaterial) orbitMaterial.uniforms.uFieldIntensity!.value = settings.fieldIntensity
   emit('cardsVisibilityChange', settings.hideCards)
   if (ambientPoints) ambientPoints.visible = settings.ambientVisible && !reducedMotion
   if (axesHelper) axesHelper.visible = settings.showAxes
@@ -451,7 +395,7 @@ function restartIntro() {
   if (reducedMotion || !logoMaterial) return
   transitionOverride = false
   transitionProgress.value = 0
-  particleState.value = 'galaxy'
+  particleState.value = 'field'
   transitionStartTime = performance.now()
   logoMaterial.uniforms.uTransitionProgress!.value = 0
 }
@@ -460,7 +404,7 @@ function setTransitionProgress(event: Event) {
   const input = event.target as HTMLInputElement
   transitionOverride = true
   transitionProgress.value = Number(input.value)
-  particleState.value = transitionProgress.value <= 0 ? 'galaxy' : transitionProgress.value >= 1 ? 'logo' : 'transition'
+  particleState.value = transitionProgress.value <= 0 ? 'field' : transitionProgress.value >= 1 ? 'logo' : 'transition'
   if (logoMaterial) logoMaterial.uniforms.uTransitionProgress!.value = transitionProgress.value
   if (reducedMotion) renderScene()
 }
@@ -480,7 +424,6 @@ function resize() {
   camera.updateProjectionMatrix()
   if (logoMaterial) logoMaterial.uniforms.uViewportHeight!.value = height * pixelRatio
   if (ambientMaterial) ambientMaterial.uniforms.uViewportHeight!.value = height * pixelRatio
-  if (orbitMaterial) orbitMaterial.uniforms.uViewportHeight!.value = height * pixelRatio
   if (reducedMotion) renderScene()
 }
 
@@ -497,7 +440,7 @@ function handleReducedMotion(event: MediaQueryListEvent) {
   }
   transitionOverride = false
   transitionProgress.value = reducedMotion ? 1 : 0
-  particleState.value = reducedMotion ? 'logo' : 'galaxy'
+  particleState.value = reducedMotion ? 'logo' : 'field'
   if (!reducedMotion) transitionStartTime = performance.now()
   lastFrameTime = 0
   applySettings()
@@ -522,8 +465,6 @@ function dispose() {
   logoMaterial?.dispose()
   ambientGeometry?.dispose()
   ambientMaterial?.dispose()
-  orbitGeometry?.dispose()
-  orbitMaterial?.dispose()
   renderer?.dispose()
   renderer = undefined
   scene = undefined
@@ -532,19 +473,16 @@ function dispose() {
   logoMaterial = undefined
   ambientGeometry = undefined
   ambientMaterial = undefined
-  orbitGeometry = undefined
-  orbitMaterial = undefined
   logoPoints = undefined
   ambientPoints = undefined
-  orbitPoints = undefined
   axesHelper = undefined
   gridHelper = undefined
   currentPositions = undefined
-  galaxyPositions = undefined
+  fieldPositions = undefined
   targetPositions = undefined
   transitionOverride = false
   transitionProgress.value = 0
-  particleState.value = 'galaxy'
+  particleState.value = 'field'
   pointerTargetX = 0
   pointerTargetY = 0
   cursorTiltX = 0
@@ -568,47 +506,43 @@ onMounted(async () => {
     const random = createRandom(sessionSeed)
     const pointCount = data.positions.length
     targetPositions = new Float32Array(pointCount * 3)
-    galaxyPositions = new Float32Array(pointCount * 3)
+    fieldPositions = new Float32Array(pointCount * 3)
     const randomSeeds = new Float32Array(pointCount * 3)
     const phases = new Float32Array(pointCount)
     const delays = new Float32Array(pointCount)
     const logoSizes = new Float32Array(pointCount)
+    const densityRanks = new Float32Array(pointCount)
+    const fieldWarmMix = new Float32Array(pointCount)
 
     data.positions.forEach(({ x, y, z }, index) => {
       const offset = index * 3
-      const isCoreParticle = random() < 0.2
-      const orbitIndex = index % 6
-      const orbitAngle = random() * Math.PI * 2
-      const orientation = orbitIndex * 0.47 - 0.72
-      const orbitRadius = 0.58 + orbitIndex * 0.075 + (random() - 0.5) * 0.085
-      const horizontal = Math.cos(orbitAngle) * orbitRadius
-      const vertical = Math.sin(orbitAngle) * orbitRadius * (0.36 + orbitIndex * 0.035)
-      const orientationCos = Math.cos(orientation)
-      const orientationSin = Math.sin(orientation)
-      const orientedX = horizontal * orientationCos - vertical * orientationSin
-      const orientedZ = horizontal * orientationSin + vertical * orientationCos
-      const coreRadius = Math.pow(random(), 2.2) * 0.34
-      const coreAngle = random() * Math.PI * 2
+      const isCoreParticle = random() < 0.34
+      const radius = Math.pow(random(), isCoreParticle ? 2.35 : 0.68)
+      const azimuth = random() * Math.PI * 2
+      const verticalSeed = random() * 2 - 1
+      const planarScale = Math.sqrt(Math.max(0, 1 - verticalSeed * verticalSeed))
+      const baseX = Math.cos(azimuth) * planarScale * radius
+      const baseZ = Math.sin(azimuth) * planarScale * radius
+      const baseDepth = verticalSeed * radius
+      const warpX = Math.sin(baseZ * 7.4 + baseDepth * 3.1) * (0.035 + radius * 0.045)
+      const warpZ = Math.sin(baseX * 5.2 - baseDepth * 4.3) * (0.025 + radius * 0.035)
+      const directionalBias = (baseZ * baseZ - 0.16) * 0.18 + (random() - 0.5) * 0.08
       targetPositions![offset] = x
       targetPositions![offset + 1] = y
       targetPositions![offset + 2] = z
-      galaxyPositions![offset] = isCoreParticle
-        ? Math.cos(coreAngle) * coreRadius + 0.08
-        : orientedX + Math.sin(orbitAngle * 3 + orbitIndex) * 0.035 + (random() - 0.5) * 0.035
-      galaxyPositions![offset + 1] = isCoreParticle
-        ? (random() - 0.5) * 0.22
-        : Math.sin(orbitAngle * 2 + orbitIndex * 0.8) * (0.07 + orbitIndex * 0.012) + (random() - 0.5) * 0.045
-      galaxyPositions![offset + 2] = isCoreParticle
-        ? 0.22 + Math.sin(coreAngle) * coreRadius * 0.62 + (random() - 0.5) * 0.08
-        : 0.22 + orientedZ + Math.cos(orbitAngle * 2.4 + orbitIndex) * 0.028 + (random() - 0.5) * 0.035
+      fieldPositions![offset] = baseX * 1.12 + warpX + directionalBias
+      fieldPositions![offset + 1] = baseDepth * 0.58 + Math.sin(baseX * 6.1 + baseZ * 3.7) * 0.035 + (random() - 0.5) * 0.045
+      fieldPositions![offset + 2] = 0.22 + baseZ * 0.72 + warpZ + Math.max(0, baseX) * 0.05
       randomSeeds[offset] = random() * 2 - 1
       randomSeeds[offset + 1] = random() * 2 - 1
       randomSeeds[offset + 2] = random() * 2 - 1
       phases[index] = random() * Math.PI * 2
       delays[index] = Math.pow(random(), 1.8) * 0.14
       logoSizes[index] = 0.9 + random() * 0.2
+      densityRanks[index] = random()
+      fieldWarmMix[index] = random() < 0.14 ? 0.18 + random() * 0.48 : random() * 0.055
     })
-    currentPositions = galaxyPositions.slice()
+    currentPositions = fieldPositions.slice()
 
     const accentColor = getComputedStyle(document.documentElement).getPropertyValue('--color-accent').trim() || '#ffec00'
     scene = new three.Scene()
@@ -617,20 +551,25 @@ onMounted(async () => {
 
     logoGeometry = new three.BufferGeometry()
     logoGeometry.setAttribute('position', new three.BufferAttribute(targetPositions, 3))
-    logoGeometry.setAttribute('galaxyPosition', new three.BufferAttribute(galaxyPositions, 3))
+    logoGeometry.setAttribute('fieldPosition', new three.BufferAttribute(fieldPositions, 3))
     logoGeometry.setAttribute('randomSeed', new three.BufferAttribute(randomSeeds, 3))
     logoGeometry.setAttribute('phase', new three.BufferAttribute(phases, 1))
     logoGeometry.setAttribute('delay', new three.BufferAttribute(delays, 1))
     logoGeometry.setAttribute('sizeVariation', new three.BufferAttribute(logoSizes, 1))
+    logoGeometry.setAttribute('densityRank', new three.BufferAttribute(densityRanks, 1))
+    logoGeometry.setAttribute('fieldWarmMix', new three.BufferAttribute(fieldWarmMix, 1))
     logoMaterial = new three.ShaderMaterial({
       vertexShader: logoVertexShader,
       fragmentShader: logoFragmentShader,
       uniforms: {
         uTime: { value: 0 },
         uTransitionProgress: { value: 0 },
-        uGalaxyRadius: { value: settings.galaxyRadius },
-        uGalaxyRotationSpeed: { value: settings.galaxyRotationSpeed },
-        uGalaxyTurbulence: { value: settings.galaxyTurbulence },
+        uFieldRadius: { value: settings.fieldRadius },
+        uFieldDensity: { value: settings.fieldDensity },
+        uFieldTurbulence: { value: settings.fieldTurbulence },
+        uFieldStrength: { value: settings.fieldStrength },
+        uFieldIntensity: { value: settings.fieldIntensity },
+        uFieldVisibility: { value: settings.fieldVisible ? 1 : 0 },
         uFlowStrength: { value: settings.flowStrength },
         uTurbulenceStrength: { value: settings.turbulenceStrength },
         uIdleStrength: { value: settings.idleStrength },
@@ -639,7 +578,7 @@ onMounted(async () => {
         uSizeAttenuation: { value: settings.sizeAttenuation },
         uLogoDepthSpread: { value: settings.logoDepthSpread },
         uSizeVariation: { value: settings.particleSizeVariation },
-        uGalaxyColor: { value: new three.Color('#d7b457') },
+        uFieldColor: { value: new three.Color('#e4e9e7') },
         uColor: { value: new three.Color(accentColor) },
         uOpacity: { value: settings.opacity },
         uBrightness: { value: settings.logoBrightness },
@@ -702,68 +641,6 @@ onMounted(async () => {
     ambientPoints.frustumCulled = false
     scene.add(ambientPoints)
 
-    const orbitCount = 3600
-    const orbitPositions = new Float32Array(orbitCount * 3)
-    const orbitDrift = new Float32Array(orbitCount * 3)
-    const orbitPhases = new Float32Array(orbitCount)
-    const orbitSpeeds = new Float32Array(orbitCount)
-    const orbitSizes = new Float32Array(orbitCount)
-    const orbitWarmMix = new Float32Array(orbitCount)
-    const orbitFamilyCount = 5
-    const pointsPerOrbit = Math.ceil(orbitCount / orbitFamilyCount)
-    for (let index = 0; index < orbitCount; index += 1) {
-      const offset = index * 3
-      const family = index % orbitFamilyCount
-      const sequenceIndex = Math.floor(index / orbitFamilyCount)
-      const angle = sequenceIndex / pointsPerOrbit * Math.PI * 2 + family * 0.38
-      const orientation = family * 0.49 - 0.86
-      const horizontalRadius = 0.4 + family * 0.065
-      const verticalRadius = 0.15 + family * 0.037
-      const horizontal = Math.cos(angle) * horizontalRadius
-      const vertical = Math.sin(angle) * verticalRadius
-      const orientationCos = Math.cos(orientation)
-      const orientationSin = Math.sin(orientation)
-      const thickness = (random() - 0.5) * (0.012 + family * 0.003)
-      orbitPositions[offset] = horizontal * orientationCos - vertical * orientationSin + thickness
-      orbitPositions[offset + 1] = Math.sin(angle * (1.55 + family * 0.08) + family) * (0.055 + family * 0.012) + (random() - 0.5) * 0.026
-      orbitPositions[offset + 2] = 0.22 + horizontal * orientationSin + vertical * orientationCos + thickness
-      orbitDrift[offset] = 0.004 + random() * 0.008
-      orbitDrift[offset + 1] = 0.005 + random() * 0.008
-      orbitDrift[offset + 2] = 0.004 + random() * 0.008
-      orbitPhases[index] = angle + random() * 0.18
-      orbitSpeeds[index] = (family % 2 === 0 ? 1 : -1) * (0.018 + family * 0.004)
-      orbitSizes[index] = random() < 0.035 ? 1.8 + random() * 1.2 : 0.72 + random() * 0.58
-      orbitWarmMix[index] = family === 1 || family === 3 ? 0.75 + random() * 0.25 : random() * 0.32
-    }
-    orbitGeometry = new three.BufferGeometry()
-    orbitGeometry.setAttribute('position', new three.BufferAttribute(orbitPositions, 3))
-    orbitGeometry.setAttribute('drift', new three.BufferAttribute(orbitDrift, 3))
-    orbitGeometry.setAttribute('phase', new three.BufferAttribute(orbitPhases, 1))
-    orbitGeometry.setAttribute('orbitSpeed', new three.BufferAttribute(orbitSpeeds, 1))
-    orbitGeometry.setAttribute('sizeVariation', new three.BufferAttribute(orbitSizes, 1))
-    orbitGeometry.setAttribute('warmMix', new three.BufferAttribute(orbitWarmMix, 1))
-    orbitMaterial = new three.ShaderMaterial({
-      vertexShader: orbitVertexShader,
-      fragmentShader: orbitFragmentShader,
-      uniforms: {
-        uTime: { value: 0 },
-        uTransitionProgress: { value: 0 },
-        uPointSize: { value: 0.0072 },
-        uViewportHeight: { value: 1 },
-        uFieldIntensity: { value: settings.fieldIntensity },
-        uLightColor: { value: new three.Color('#f2f0e8') },
-        uWarmColor: { value: new three.Color(accentColor) },
-      },
-      transparent: true,
-      depthWrite: false,
-      depthTest: false,
-      blending: three.AdditiveBlending,
-    })
-    orbitPoints = new three.Points(orbitGeometry, orbitMaterial)
-    orbitPoints.frustumCulled = false
-    orbitPoints.renderOrder = 2
-    scene.add(orbitPoints)
-
     axesHelper = new three.AxesHelper(0.35)
     axesHelper.position.set(-0.5, 0, 0)
     scene.add(axesHelper)
@@ -786,7 +663,7 @@ onMounted(async () => {
     resizeObserver.observe(canvas.value)
     transitionStartTime = performance.now()
     transitionProgress.value = reducedMotion ? 1 : 0
-    particleState.value = reducedMotion ? 'logo' : 'galaxy'
+    particleState.value = reducedMotion ? 'logo' : 'field'
     applySettings()
     resize()
     emit('introStart', reducedMotion)
@@ -833,10 +710,12 @@ onBeforeUnmount(dispose)
             <button class="particle-debug__wide-action" type="button" @click="restartIntro">Replay intro</button>
           </div>
           <div class="particle-debug__group">
-            <h2>Orbital field</h2>
-            <label>Field radius <output>{{ settings.galaxyRadius.toFixed(2) }}</output><input v-model.number="settings.galaxyRadius" type="range" min="0.35" max="1.5" step="0.01" /></label>
-            <label>Rotation speed <output>{{ settings.galaxyRotationSpeed.toFixed(3) }}</output><input v-model.number="settings.galaxyRotationSpeed" type="range" min="-0.3" max="0.3" step="0.005" /></label>
-            <label>Field turbulence <output>{{ settings.galaxyTurbulence.toFixed(3) }}</output><input v-model.number="settings.galaxyTurbulence" type="range" min="0" max="0.08" step="0.001" /></label>
+            <h2>Particle field</h2>
+            <label class="particle-debug__check"><input v-model="settings.fieldVisible" type="checkbox" /> Field visible</label>
+            <label>Field radius <output>{{ settings.fieldRadius.toFixed(2) }}</output><input v-model.number="settings.fieldRadius" type="range" min="0.35" max="1.5" step="0.01" /></label>
+            <label>Field density <output>{{ settings.fieldDensity.toFixed(2) }}</output><input v-model.number="settings.fieldDensity" type="range" min="0.1" max="1" step="0.01" /></label>
+            <label>Field turbulence <output>{{ settings.fieldTurbulence.toFixed(3) }}</output><input v-model.number="settings.fieldTurbulence" type="range" min="0" max="0.08" step="0.001" /></label>
+            <label>Field strength <output>{{ settings.fieldStrength.toFixed(3) }}</output><input v-model.number="settings.fieldStrength" type="range" min="0" max="0.12" step="0.002" /></label>
             <label>Transition progress <output>{{ transitionProgress.toFixed(2) }}</output><input :value="transitionProgress" type="range" min="0" max="1" step="0.01" @input="setTransitionProgress" /></label>
             <label>Transition duration <output>{{ settings.transitionDuration.toFixed(2) }} s</output><input v-model.number="settings.transitionDuration" type="range" min="0.5" max="2.5" step="0.05" /></label>
             <label>Field intensity <output>{{ settings.fieldIntensity.toFixed(2) }}</output><input v-model.number="settings.fieldIntensity" type="range" min="0" max="1" step="0.01" /></label>
