@@ -24,10 +24,12 @@ const settings = reactive({
   cameraDistance: 1.2,
   pointSize: 0.006,
   opacity: 0.68,
+  logoBrightness: 1,
   introDuration: 1.45,
   flowStrength: 0.24,
   turbulenceStrength: 0.055,
   idleStrength: 0.002,
+  cursorTiltStrength: 0.025,
   ambientVisible: true,
   showAxes: false,
   showGrid: false,
@@ -88,12 +90,15 @@ const logoVertexShader = `
 const logoFragmentShader = `
   uniform vec3 uColor;
   uniform float uOpacity;
+  uniform float uBrightness;
 
   void main() {
     float distanceToCenter = distance(gl_PointCoord, vec2(0.5));
-    float softCircle = 1.0 - smoothstep(0.28, 0.5, distanceToCenter);
-    if (softCircle <= 0.0) discard;
-    gl_FragColor = vec4(uColor, uOpacity * softCircle);
+    float core = 1.0 - smoothstep(0.20, 0.40, distanceToCenter);
+    float halo = 1.0 - smoothstep(0.34, 0.50, distanceToCenter);
+    float particleAlpha = min(1.0, core + halo * 0.20);
+    if (particleAlpha <= 0.0) discard;
+    gl_FragColor = vec4(uColor * uBrightness, uOpacity * particleAlpha);
   }
 `
 
@@ -106,7 +111,12 @@ const ambientVertexShader = `
   uniform float uViewportHeight;
 
   void main() {
-    vec3 animatedPosition = position + vec3(
+    float orbitSpeed = 0.012 + (sin(phase * 1.37) * 0.5 + 0.5) * 0.018;
+    float orbitAngle = uTime * orbitSpeed;
+    float orbitCos = cos(orbitAngle);
+    float orbitSin = sin(orbitAngle);
+    vec2 orbitPosition = mat2(orbitCos, -orbitSin, orbitSin, orbitCos) * position.xy;
+    vec3 animatedPosition = vec3(orbitPosition, position.z) + vec3(
       sin(uTime * 0.13 + phase) * drift.x,
       cos(uTime * 0.11 + phase * 1.17) * drift.y,
       sin(uTime * 0.09 + phase * 0.83) * drift.z
@@ -123,9 +133,11 @@ const ambientFragmentShader = `
 
   void main() {
     float distanceToCenter = distance(gl_PointCoord, vec2(0.5));
-    float softCircle = 1.0 - smoothstep(0.2, 0.5, distanceToCenter);
-    if (softCircle <= 0.0) discard;
-    gl_FragColor = vec4(uColor, uOpacity * softCircle);
+    float core = 1.0 - smoothstep(0.18, 0.38, distanceToCenter);
+    float halo = 1.0 - smoothstep(0.32, 0.50, distanceToCenter);
+    float particleAlpha = min(1.0, core + halo * 0.14);
+    if (particleAlpha <= 0.0) discard;
+    gl_FragColor = vec4(uColor, uOpacity * particleAlpha);
   }
 `
 
@@ -143,8 +155,13 @@ let ambientPoints: THREE.Points | undefined
 let axesHelper: THREE.AxesHelper | undefined
 let gridHelper: THREE.GridHelper | undefined
 let introStartTime = 0
+let lastFrameTime = 0
 let reducedMotion = false
 let disposed = false
+let pointerTargetX = 0
+let pointerTargetY = 0
+let cursorTiltX = 0
+let cursorTiltZ = 0
 
 /** CPU-side position sets stay isolated so a future morph can replace the target safely. */
 let startPositions: Float32Array | undefined
@@ -157,10 +174,13 @@ function renderScene() {
 
 function animate(time: number) {
   if (!renderer || !scene || !camera || !logoMaterial || !ambientMaterial) return
+  const deltaSeconds = lastFrameTime ? Math.min((time - lastFrameTime) / 1000, 0.05) : 0
+  lastFrameTime = time
   const elapsedSeconds = Math.max(0, time - introStartTime) / 1000
   logoMaterial.uniforms.uTime!.value = time / 1000
   logoMaterial.uniforms.uIntroProgress!.value = Math.min(1, elapsedSeconds / settings.introDuration)
   ambientMaterial.uniforms.uTime!.value = time / 1000
+  updateCursorTilt(deltaSeconds)
   renderer.render(scene, camera)
 }
 
@@ -194,18 +214,53 @@ function updateCamera() {
   camera.lookAt(0, 0, 0.22)
 }
 
-function applySettings() {
+function applyParticleTransforms() {
   if (logoPoints) {
-    logoPoints.rotation.set(settings.rotationX, settings.rotationY, settings.rotationZ)
+    logoPoints.rotation.set(
+      settings.rotationX + cursorTiltX,
+      settings.rotationY,
+      settings.rotationZ + cursorTiltZ,
+    )
     logoPoints.scale.setScalar(settings.scale)
     logoPoints.position.z = settings.verticalOffset
   }
+  if (ambientPoints) {
+    ambientPoints.rotation.set(cursorTiltX * 0.7, 0, cursorTiltZ * 0.7)
+  }
+}
+
+function updateCursorTilt(deltaSeconds: number) {
+  if (!logoMaterial) return
+  const introProgress = Number(logoMaterial.uniforms.uIntroProgress!.value)
+  const interactionEnvelope = Math.max(0, Math.min(1, (introProgress - 0.72) / 0.28))
+  const targetX = reducedMotion ? 0 : pointerTargetY * settings.cursorTiltStrength * interactionEnvelope
+  const targetZ = reducedMotion ? 0 : -pointerTargetX * settings.cursorTiltStrength * interactionEnvelope
+  const smoothing = 1 - Math.exp(-deltaSeconds * 6.5)
+  cursorTiltX += (targetX - cursorTiltX) * smoothing
+  cursorTiltZ += (targetZ - cursorTiltZ) * smoothing
+  applyParticleTransforms()
+}
+
+function handlePointerMove(event: PointerEvent) {
+  if (reducedMotion) return
+  pointerTargetX = Math.max(-1, Math.min(1, event.clientX / window.innerWidth * 2 - 1))
+  pointerTargetY = Math.max(-1, Math.min(1, event.clientY / window.innerHeight * 2 - 1))
+}
+
+function resetCursorTilt() {
+  pointerTargetX = 0
+  pointerTargetY = 0
+}
+
+function applySettings() {
+  applyParticleTransforms()
   if (logoMaterial) {
     logoMaterial.uniforms.uPointSize!.value = settings.pointSize
     logoMaterial.uniforms.uOpacity!.value = settings.opacity
     logoMaterial.uniforms.uFlowStrength!.value = settings.flowStrength
     logoMaterial.uniforms.uTurbulenceStrength!.value = settings.turbulenceStrength
     logoMaterial.uniforms.uIdleStrength!.value = reducedMotion ? 0 : settings.idleStrength
+    logoMaterial.uniforms.uBrightness!.value = settings.logoBrightness
   }
   if (ambientPoints) ambientPoints.visible = settings.ambientVisible && !reducedMotion
   if (axesHelper) axesHelper.visible = settings.showAxes
@@ -245,11 +300,17 @@ function resize() {
 
 function handleReducedMotion(event: MediaQueryListEvent) {
   reducedMotion = event.matches
+  resetCursorTilt()
+  if (reducedMotion) {
+    cursorTiltX = 0
+    cursorTiltZ = 0
+  }
   if (logoMaterial) {
     logoMaterial.uniforms.uIntroProgress!.value = reducedMotion ? 1 : 0
     logoMaterial.uniforms.uIdleStrength!.value = reducedMotion ? 0 : settings.idleStrength
   }
   if (!reducedMotion) introStartTime = performance.now()
+  lastFrameTime = 0
   applySettings()
   syncAnimationLoop()
 }
@@ -258,6 +319,9 @@ function dispose() {
   disposed = true
   resizeObserver?.disconnect()
   reducedMotionQuery?.removeEventListener('change', handleReducedMotion)
+  window.removeEventListener('pointermove', handlePointerMove)
+  window.removeEventListener('blur', resetCursorTilt)
+  document.documentElement.removeEventListener('pointerleave', resetCursorTilt)
   renderer?.setAnimationLoop(null)
   logoGeometry?.dispose()
   logoMaterial?.dispose()
@@ -278,6 +342,10 @@ function dispose() {
   currentPositions = undefined
   startPositions = undefined
   targetPositions = undefined
+  pointerTargetX = 0
+  pointerTargetY = 0
+  cursorTiltX = 0
+  cursorTiltZ = 0
 }
 
 onMounted(async () => {
@@ -344,6 +412,7 @@ onMounted(async () => {
         uViewportHeight: { value: 1 },
         uColor: { value: new three.Color(accentColor) },
         uOpacity: { value: settings.opacity },
+        uBrightness: { value: settings.logoBrightness },
       },
       transparent: true,
       depthWrite: false,
@@ -407,6 +476,9 @@ onMounted(async () => {
     reducedMotion = reducedMotionQuery.matches
     logoMaterial.uniforms.uIntroProgress!.value = reducedMotion ? 1 : 0
     reducedMotionQuery.addEventListener('change', handleReducedMotion)
+    window.addEventListener('pointermove', handlePointerMove, { passive: true })
+    window.addEventListener('blur', resetCursorTilt)
+    document.documentElement.addEventListener('pointerleave', resetCursorTilt)
     resizeObserver = new ResizeObserver(resize)
     resizeObserver.observe(canvas.value)
     introStartTime = performance.now()
@@ -452,12 +524,14 @@ onBeforeUnmount(dispose)
             <label>Flow strength <output>{{ settings.flowStrength.toFixed(3) }}</output><input v-model.number="settings.flowStrength" type="range" min="0" max="0.5" step="0.005" /></label>
             <label>Turbulence <output>{{ settings.turbulenceStrength.toFixed(3) }}</output><input v-model.number="settings.turbulenceStrength" type="range" min="0" max="0.2" step="0.005" /></label>
             <label>Idle strength <output>{{ settings.idleStrength.toFixed(3) }}</output><input v-model.number="settings.idleStrength" type="range" min="0" max="0.02" step="0.001" /></label>
+            <label>Cursor tilt <output>{{ settings.cursorTiltStrength.toFixed(3) }}</output><input v-model.number="settings.cursorTiltStrength" type="range" min="0" max="0.08" step="0.001" /></label>
             <button class="particle-debug__wide-action" type="button" @click="restartIntro">Replay intro</button>
           </div>
           <div class="particle-debug__group">
             <h2>Particles</h2>
             <label>Point size <output>{{ settings.pointSize.toFixed(3) }}</output><input v-model.number="settings.pointSize" type="range" min="0.001" max="0.02" step="0.001" /></label>
             <label>Opacity <output>{{ settings.opacity.toFixed(2) }}</output><input v-model.number="settings.opacity" type="range" min="0.05" max="1" step="0.01" /></label>
+            <label>Logo brightness <output>{{ settings.logoBrightness.toFixed(2) }}</output><input v-model.number="settings.logoBrightness" type="range" min="0.5" max="1.5" step="0.01" /></label>
             <label class="particle-debug__check"><input v-model="settings.ambientVisible" type="checkbox" /> Ambient particles</label>
           </div>
           <div class="particle-debug__group particle-debug__switches">
