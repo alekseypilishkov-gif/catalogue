@@ -11,6 +11,7 @@ type ParticleState = 'galaxy' | 'transition' | 'logo'
 
 const emit = defineEmits<{
   introStart: [reducedMotion: boolean]
+  cardsVisibilityChange: [hidden: boolean]
 }>()
 
 const canvas = ref<HTMLCanvasElement | null>(null)
@@ -36,6 +37,7 @@ const settings = reactive({
   galaxyRotationSpeed: 0.08,
   galaxyTurbulence: 0.018,
   transitionDuration: 1.05,
+  fieldIntensity: 0.78,
   ambientIntensity: 0.18,
   flowStrength: 0.24,
   turbulenceStrength: 0.055,
@@ -47,6 +49,7 @@ const settings = reactive({
   cardHoverGlowIntensity: 0.65,
   cardHoverGlowScale: 1,
   cardHoverFollow: 0.14,
+  hideCards: false,
   showAxes: false,
   showGrid: false,
 })
@@ -128,7 +131,7 @@ const logoVertexShader = `
     vDepthBrightness = clamp(0.86 + perspectiveScale * 0.14, 0.86, 1.12);
     vTransitionProgress = easedProgress;
     gl_Position = projectionMatrix * modelViewPosition;
-    float stateSize = mix(0.42, 1.0, easedProgress);
+    float stateSize = mix(0.62, 1.0, easedProgress);
     gl_PointSize = clamp(uPointSize * uViewportHeight * 0.5 * individualSize * perspectiveScale * stateSize, 0.75, 8.0);
   }
 `
@@ -186,7 +189,7 @@ const ambientVertexShader = `
     float individualSize = mix(1.0, sizeVariation, uSizeVariation);
     vDepthBrightness = clamp(0.78 + perspectiveScale * 0.18, 0.76, 1.16);
     gl_Position = projectionMatrix * modelViewPosition;
-    gl_PointSize = clamp(uPointSize * uViewportHeight * 0.5 * individualSize * perspectiveScale, 0.7, 4.2);
+    gl_PointSize = clamp(uPointSize * uViewportHeight * 0.5 * individualSize * perspectiveScale, 0.7, 7.0);
   }
 `
 
@@ -206,6 +209,68 @@ const ambientFragmentShader = `
   }
 `
 
+const orbitVertexShader = `
+  attribute vec3 drift;
+  attribute float phase;
+  attribute float orbitSpeed;
+  attribute float sizeVariation;
+  attribute float warmMix;
+
+  uniform float uTime;
+  uniform float uTransitionProgress;
+  uniform float uPointSize;
+  uniform float uViewportHeight;
+  uniform float uFieldIntensity;
+
+  varying float vBrightness;
+  varying float vWarmMix;
+  varying float vAlpha;
+
+  void main() {
+    float angle = uTime * orbitSpeed;
+    float orbitCos = cos(angle);
+    float orbitSin = sin(angle);
+    vec2 rotated = mat2(orbitCos, -orbitSin, orbitSin, orbitCos) * position.xz;
+    float energyPulse = sin(phase * 2.0 + uTime * 1.4) * 0.5 + 0.5;
+    vec3 animatedPosition = vec3(rotated.x, position.y, rotated.y) + vec3(
+      sin(uTime * 0.24 + phase) * drift.x,
+      cos(uTime * 0.19 + phase * 1.31) * drift.y,
+      sin(uTime * 0.22 + phase * 0.83) * drift.z
+    );
+    animatedPosition *= mix(1.0, 0.94, smoothstep(0.0, 1.0, uTransitionProgress));
+
+    vec4 modelViewPosition = modelViewMatrix * vec4(animatedPosition, 1.0);
+    float cameraDepth = max(0.2, -modelViewPosition.z);
+    float depthScale = clamp(1.0 / cameraDepth, 0.72, 1.8);
+    vBrightness = mix(0.92, 1.62, energyPulse) * mix(0.92, 1.08, uTransitionProgress);
+    vWarmMix = warmMix;
+    vAlpha = uFieldIntensity * mix(0.76, 1.0, energyPulse);
+    gl_Position = projectionMatrix * modelViewPosition;
+    gl_PointSize = clamp(uPointSize * uViewportHeight * sizeVariation * depthScale, 0.8, 7.0);
+  }
+`
+
+const orbitFragmentShader = `
+  uniform vec3 uLightColor;
+  uniform vec3 uWarmColor;
+  uniform float uTransitionProgress;
+
+  varying float vBrightness;
+  varying float vWarmMix;
+  varying float vAlpha;
+
+  void main() {
+    float distanceToCenter = distance(gl_PointCoord, vec2(0.5));
+    float core = 1.0 - smoothstep(0.06, 0.25, distanceToCenter);
+    float halo = 1.0 - smoothstep(0.18, 0.50, distanceToCenter);
+    float particleAlpha = min(1.0, core + halo * 0.48);
+    if (particleAlpha <= 0.0) discard;
+    float finalWarmMix = vWarmMix * mix(0.28, 0.48, uTransitionProgress);
+    vec3 particleColor = mix(uLightColor, uWarmColor, finalWarmMix);
+    gl_FragColor = vec4(particleColor * vBrightness, vAlpha * particleAlpha);
+  }
+`
+
 let renderer: THREE.WebGLRenderer | undefined
 let scene: THREE.Scene | undefined
 let camera: THREE.PerspectiveCamera | undefined
@@ -213,10 +278,13 @@ let logoGeometry: THREE.BufferGeometry | undefined
 let logoMaterial: THREE.ShaderMaterial | undefined
 let ambientGeometry: THREE.BufferGeometry | undefined
 let ambientMaterial: THREE.ShaderMaterial | undefined
+let orbitGeometry: THREE.BufferGeometry | undefined
+let orbitMaterial: THREE.ShaderMaterial | undefined
 let resizeObserver: ResizeObserver | undefined
 let reducedMotionQuery: MediaQueryList | undefined
 let logoPoints: THREE.Points | undefined
 let ambientPoints: THREE.Points | undefined
+let orbitPoints: THREE.Points | undefined
 let axesHelper: THREE.AxesHelper | undefined
 let gridHelper: THREE.GridHelper | undefined
 let transitionStartTime = 0
@@ -243,7 +311,7 @@ function renderScene() {
 }
 
 function animate(time: number) {
-  if (!renderer || !scene || !camera || !logoMaterial || !ambientMaterial) return
+  if (!renderer || !scene || !camera || !logoMaterial || !ambientMaterial || !orbitMaterial) return
   const deltaSeconds = lastFrameTime ? Math.min((time - lastFrameTime) / 1000, 0.05) : 0
   lastFrameTime = time
   const elapsedSeconds = Math.max(0, time - transitionStartTime) / 1000
@@ -258,6 +326,8 @@ function animate(time: number) {
     lastProgressUiUpdate = time
   }
   ambientMaterial.uniforms.uTime!.value = time / 1000
+  orbitMaterial.uniforms.uTime!.value = time / 1000
+  orbitMaterial.uniforms.uTransitionProgress!.value = activeProgress
   updateCursorTilt(deltaSeconds)
   renderer.render(scene, camera)
 }
@@ -306,6 +376,9 @@ function applyParticleTransforms() {
   }
   if (ambientPoints) {
     ambientPoints.rotation.set(cursorTiltX * 0.7, 0, cursorTiltZ * 0.7)
+  }
+  if (orbitPoints) {
+    orbitPoints.rotation.set(cursorTiltX * 0.42, 0, cursorTiltZ * 0.42)
   }
 }
 
@@ -360,6 +433,8 @@ function applySettings() {
     ambientMaterial.uniforms.uSizeVariation!.value = settings.particleSizeVariation
     ambientMaterial.uniforms.uOpacity!.value = settings.ambientIntensity
   }
+  if (orbitMaterial) orbitMaterial.uniforms.uFieldIntensity!.value = settings.fieldIntensity
+  emit('cardsVisibilityChange', settings.hideCards)
   if (ambientPoints) ambientPoints.visible = settings.ambientVisible && !reducedMotion
   if (axesHelper) axesHelper.visible = settings.showAxes
   if (gridHelper) gridHelper.visible = settings.showGrid
@@ -405,6 +480,7 @@ function resize() {
   camera.updateProjectionMatrix()
   if (logoMaterial) logoMaterial.uniforms.uViewportHeight!.value = height * pixelRatio
   if (ambientMaterial) ambientMaterial.uniforms.uViewportHeight!.value = height * pixelRatio
+  if (orbitMaterial) orbitMaterial.uniforms.uViewportHeight!.value = height * pixelRatio
   if (reducedMotion) renderScene()
 }
 
@@ -446,6 +522,8 @@ function dispose() {
   logoMaterial?.dispose()
   ambientGeometry?.dispose()
   ambientMaterial?.dispose()
+  orbitGeometry?.dispose()
+  orbitMaterial?.dispose()
   renderer?.dispose()
   renderer = undefined
   scene = undefined
@@ -454,8 +532,11 @@ function dispose() {
   logoMaterial = undefined
   ambientGeometry = undefined
   ambientMaterial = undefined
+  orbitGeometry = undefined
+  orbitMaterial = undefined
   logoPoints = undefined
   ambientPoints = undefined
+  orbitPoints = undefined
   axesHelper = undefined
   gridHelper = undefined
   currentPositions = undefined
@@ -468,6 +549,7 @@ function dispose() {
   pointerTargetY = 0
   cursorTiltX = 0
   cursorTiltZ = 0
+  emit('cardsVisibilityChange', false)
 }
 
 onMounted(async () => {
@@ -494,21 +576,31 @@ onMounted(async () => {
 
     data.positions.forEach(({ x, y, z }, index) => {
       const offset = index * 3
-      const isCoreParticle = random() < 0.14
-      const armIndex = index % 3
-      const normalizedRadius = isCoreParticle ? Math.pow(random(), 1.8) * 0.25 : Math.pow(random(), 0.74)
-      const armAngle = armIndex / 3 * Math.PI * 2
-      const spiralAngle = isCoreParticle
-        ? random() * Math.PI * 2
-        : armAngle + normalizedRadius * Math.PI * 2.35 + (random() - 0.5) * (0.12 + normalizedRadius * 0.16)
-      const depthLayerIndex = index % 3 - 1
-      const depthLayer = depthLayerIndex * 0.07 + (random() - 0.5) * (0.025 + normalizedRadius * 0.05)
+      const isCoreParticle = random() < 0.2
+      const orbitIndex = index % 6
+      const orbitAngle = random() * Math.PI * 2
+      const orientation = orbitIndex * 0.47 - 0.72
+      const orbitRadius = 0.58 + orbitIndex * 0.075 + (random() - 0.5) * 0.085
+      const horizontal = Math.cos(orbitAngle) * orbitRadius
+      const vertical = Math.sin(orbitAngle) * orbitRadius * (0.36 + orbitIndex * 0.035)
+      const orientationCos = Math.cos(orientation)
+      const orientationSin = Math.sin(orientation)
+      const orientedX = horizontal * orientationCos - vertical * orientationSin
+      const orientedZ = horizontal * orientationSin + vertical * orientationCos
+      const coreRadius = Math.pow(random(), 2.2) * 0.34
+      const coreAngle = random() * Math.PI * 2
       targetPositions![offset] = x
       targetPositions![offset + 1] = y
       targetPositions![offset + 2] = z
-      galaxyPositions![offset] = Math.cos(spiralAngle) * normalizedRadius
-      galaxyPositions![offset + 1] = depthLayer
-      galaxyPositions![offset + 2] = 0.22 + Math.sin(spiralAngle) * normalizedRadius * 0.56 + (random() - 0.5) * 0.025
+      galaxyPositions![offset] = isCoreParticle
+        ? Math.cos(coreAngle) * coreRadius + 0.08
+        : orientedX + Math.sin(orbitAngle * 3 + orbitIndex) * 0.035 + (random() - 0.5) * 0.035
+      galaxyPositions![offset + 1] = isCoreParticle
+        ? (random() - 0.5) * 0.22
+        : Math.sin(orbitAngle * 2 + orbitIndex * 0.8) * (0.07 + orbitIndex * 0.012) + (random() - 0.5) * 0.045
+      galaxyPositions![offset + 2] = isCoreParticle
+        ? 0.22 + Math.sin(coreAngle) * coreRadius * 0.62 + (random() - 0.5) * 0.08
+        : 0.22 + orientedZ + Math.cos(orbitAngle * 2.4 + orbitIndex) * 0.028 + (random() - 0.5) * 0.035
       randomSeeds[offset] = random() * 2 - 1
       randomSeeds[offset + 1] = random() * 2 - 1
       randomSeeds[offset + 2] = random() * 2 - 1
@@ -547,7 +639,7 @@ onMounted(async () => {
         uSizeAttenuation: { value: settings.sizeAttenuation },
         uLogoDepthSpread: { value: settings.logoDepthSpread },
         uSizeVariation: { value: settings.particleSizeVariation },
-        uGalaxyColor: { value: new three.Color('#e8f1f0') },
+        uGalaxyColor: { value: new three.Color('#d7b457') },
         uColor: { value: new three.Color(accentColor) },
         uOpacity: { value: settings.opacity },
         uBrightness: { value: settings.logoBrightness },
@@ -555,13 +647,14 @@ onMounted(async () => {
       transparent: true,
       depthWrite: false,
       depthTest: false,
+      blending: three.AdditiveBlending,
     })
     logoPoints = new three.Points(logoGeometry, logoMaterial)
     logoPoints.frustumCulled = false
     logoPoints.renderOrder = 1
     scene.add(logoPoints)
 
-    const ambientCount = 720
+    const ambientCount = 960
     const ambientPositions = new Float32Array(ambientCount * 3)
     const ambientDrift = new Float32Array(ambientCount * 3)
     const ambientPhases = new Float32Array(ambientCount)
@@ -579,7 +672,7 @@ onMounted(async () => {
       ambientDrift[offset + 2] = 0.008 + random() * 0.018
       ambientPhases[index] = random() * Math.PI * 2
       ambientDepthSeeds[index] = random() * 2 - 1
-      ambientSizes[index] = 0.62 + random() * 0.76
+      ambientSizes[index] = random() < 0.05 ? 2.4 + random() * 1.8 : 0.62 + random() * 0.82
     }
     ambientGeometry = new three.BufferGeometry()
     ambientGeometry.setAttribute('position', new three.BufferAttribute(ambientPositions, 3))
@@ -592,7 +685,7 @@ onMounted(async () => {
       fragmentShader: ambientFragmentShader,
       uniforms: {
         uTime: { value: 0 },
-        uPointSize: { value: 0.0028 },
+        uPointSize: { value: 0.0032 },
         uViewportHeight: { value: 1 },
         uSizeAttenuation: { value: settings.sizeAttenuation },
         uAmbientDepthSpread: { value: settings.ambientDepthSpread },
@@ -603,10 +696,73 @@ onMounted(async () => {
       transparent: true,
       depthWrite: false,
       depthTest: false,
+      blending: three.AdditiveBlending,
     })
     ambientPoints = new three.Points(ambientGeometry, ambientMaterial)
     ambientPoints.frustumCulled = false
     scene.add(ambientPoints)
+
+    const orbitCount = 3600
+    const orbitPositions = new Float32Array(orbitCount * 3)
+    const orbitDrift = new Float32Array(orbitCount * 3)
+    const orbitPhases = new Float32Array(orbitCount)
+    const orbitSpeeds = new Float32Array(orbitCount)
+    const orbitSizes = new Float32Array(orbitCount)
+    const orbitWarmMix = new Float32Array(orbitCount)
+    const orbitFamilyCount = 5
+    const pointsPerOrbit = Math.ceil(orbitCount / orbitFamilyCount)
+    for (let index = 0; index < orbitCount; index += 1) {
+      const offset = index * 3
+      const family = index % orbitFamilyCount
+      const sequenceIndex = Math.floor(index / orbitFamilyCount)
+      const angle = sequenceIndex / pointsPerOrbit * Math.PI * 2 + family * 0.38
+      const orientation = family * 0.49 - 0.86
+      const horizontalRadius = 0.4 + family * 0.065
+      const verticalRadius = 0.15 + family * 0.037
+      const horizontal = Math.cos(angle) * horizontalRadius
+      const vertical = Math.sin(angle) * verticalRadius
+      const orientationCos = Math.cos(orientation)
+      const orientationSin = Math.sin(orientation)
+      const thickness = (random() - 0.5) * (0.012 + family * 0.003)
+      orbitPositions[offset] = horizontal * orientationCos - vertical * orientationSin + thickness
+      orbitPositions[offset + 1] = Math.sin(angle * (1.55 + family * 0.08) + family) * (0.055 + family * 0.012) + (random() - 0.5) * 0.026
+      orbitPositions[offset + 2] = 0.22 + horizontal * orientationSin + vertical * orientationCos + thickness
+      orbitDrift[offset] = 0.004 + random() * 0.008
+      orbitDrift[offset + 1] = 0.005 + random() * 0.008
+      orbitDrift[offset + 2] = 0.004 + random() * 0.008
+      orbitPhases[index] = angle + random() * 0.18
+      orbitSpeeds[index] = (family % 2 === 0 ? 1 : -1) * (0.018 + family * 0.004)
+      orbitSizes[index] = random() < 0.035 ? 1.8 + random() * 1.2 : 0.72 + random() * 0.58
+      orbitWarmMix[index] = family === 1 || family === 3 ? 0.75 + random() * 0.25 : random() * 0.32
+    }
+    orbitGeometry = new three.BufferGeometry()
+    orbitGeometry.setAttribute('position', new three.BufferAttribute(orbitPositions, 3))
+    orbitGeometry.setAttribute('drift', new three.BufferAttribute(orbitDrift, 3))
+    orbitGeometry.setAttribute('phase', new three.BufferAttribute(orbitPhases, 1))
+    orbitGeometry.setAttribute('orbitSpeed', new three.BufferAttribute(orbitSpeeds, 1))
+    orbitGeometry.setAttribute('sizeVariation', new three.BufferAttribute(orbitSizes, 1))
+    orbitGeometry.setAttribute('warmMix', new three.BufferAttribute(orbitWarmMix, 1))
+    orbitMaterial = new three.ShaderMaterial({
+      vertexShader: orbitVertexShader,
+      fragmentShader: orbitFragmentShader,
+      uniforms: {
+        uTime: { value: 0 },
+        uTransitionProgress: { value: 0 },
+        uPointSize: { value: 0.0072 },
+        uViewportHeight: { value: 1 },
+        uFieldIntensity: { value: settings.fieldIntensity },
+        uLightColor: { value: new three.Color('#f2f0e8') },
+        uWarmColor: { value: new three.Color(accentColor) },
+      },
+      transparent: true,
+      depthWrite: false,
+      depthTest: false,
+      blending: three.AdditiveBlending,
+    })
+    orbitPoints = new three.Points(orbitGeometry, orbitMaterial)
+    orbitPoints.frustumCulled = false
+    orbitPoints.renderOrder = 2
+    scene.add(orbitPoints)
 
     axesHelper = new three.AxesHelper(0.35)
     axesHelper.position.set(-0.5, 0, 0)
@@ -677,12 +833,13 @@ onBeforeUnmount(dispose)
             <button class="particle-debug__wide-action" type="button" @click="restartIntro">Replay intro</button>
           </div>
           <div class="particle-debug__group">
-            <h2>Galaxy</h2>
-            <label>Galaxy radius <output>{{ settings.galaxyRadius.toFixed(2) }}</output><input v-model.number="settings.galaxyRadius" type="range" min="0.35" max="1.5" step="0.01" /></label>
+            <h2>Orbital field</h2>
+            <label>Field radius <output>{{ settings.galaxyRadius.toFixed(2) }}</output><input v-model.number="settings.galaxyRadius" type="range" min="0.35" max="1.5" step="0.01" /></label>
             <label>Rotation speed <output>{{ settings.galaxyRotationSpeed.toFixed(3) }}</output><input v-model.number="settings.galaxyRotationSpeed" type="range" min="-0.3" max="0.3" step="0.005" /></label>
-            <label>Galaxy turbulence <output>{{ settings.galaxyTurbulence.toFixed(3) }}</output><input v-model.number="settings.galaxyTurbulence" type="range" min="0" max="0.08" step="0.001" /></label>
+            <label>Field turbulence <output>{{ settings.galaxyTurbulence.toFixed(3) }}</output><input v-model.number="settings.galaxyTurbulence" type="range" min="0" max="0.08" step="0.001" /></label>
             <label>Transition progress <output>{{ transitionProgress.toFixed(2) }}</output><input :value="transitionProgress" type="range" min="0" max="1" step="0.01" @input="setTransitionProgress" /></label>
             <label>Transition duration <output>{{ settings.transitionDuration.toFixed(2) }} s</output><input v-model.number="settings.transitionDuration" type="range" min="0.5" max="2.5" step="0.05" /></label>
+            <label>Field intensity <output>{{ settings.fieldIntensity.toFixed(2) }}</output><input v-model.number="settings.fieldIntensity" type="range" min="0" max="1" step="0.01" /></label>
             <label>Ambient intensity <output>{{ settings.ambientIntensity.toFixed(2) }}</output><input v-model.number="settings.ambientIntensity" type="range" min="0" max="0.6" step="0.01" /></label>
           </div>
           <div class="particle-debug__group">
@@ -706,6 +863,7 @@ onBeforeUnmount(dispose)
           </div>
           <div class="particle-debug__group particle-debug__switches">
             <h2>Debug</h2>
+            <label><input v-model="settings.hideCards" type="checkbox" /> Hide cards</label>
             <label><input v-model="settings.showAxes" type="checkbox" /> Show XYZ axes</label>
             <label><input v-model="settings.showGrid" type="checkbox" /> Show grid</label>
           </div>

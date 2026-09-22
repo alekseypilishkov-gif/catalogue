@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { LD_WEBSITE, industries, mainCategories } from '~/data/catalogue'
 const selectedIndustry = ref<string | null>(null)
+const debugCardsHidden = ref(false)
 const visibleCardCount = ref(0)
 const totalEntranceCards = mainCategories.length + industries.length
 let entranceTimer: ReturnType<typeof setTimeout> | undefined
@@ -41,13 +42,13 @@ onBeforeUnmount(() => {
         </div>
         <section class="catalogue-hero" aria-label="Выбор каталога">
           <div class="container catalogue-grid">
-            <ParticlesParticleLogo class="hero-particles" @intro-start="startCardEntrance" />
-            <section class="catalogue-column catalogue-primary" aria-labelledby="main-categories-title">
+            <ParticlesParticleLogo class="hero-particles" @intro-start="startCardEntrance" @cards-visibility-change="debugCardsHidden = $event" />
+            <section class="catalogue-column catalogue-primary" :class="{ 'is-debug-hidden': debugCardsHidden }" aria-labelledby="main-categories-title">
               <h2 id="main-categories-title">Основные</h2>
               <p class="section-description">Ознакомьтесь с ассортиментом и техническими данным нашей продукции</p>
               <div class="main-card-list"><CatalogMainCategoryCard v-for="(item, index) in mainCategories" :key="item.id" :title="item.title" :description="item.description" :href="item.href" :class="{ 'is-entrance-visible': visibleCardCount > index }" /></div>
             </section>
-            <section class="catalogue-column catalogue-industries" aria-labelledby="industry-categories-title">
+            <section class="catalogue-column catalogue-industries" :class="{ 'is-debug-hidden': debugCardsHidden }" aria-labelledby="industry-categories-title">
               <h2 id="industry-categories-title">По отраслям</h2>
               <p class="section-description">Выборка категорий продукции,<br class="desktop-break" /> отфильтрованная по конкретной отрасли</p>
               <div class="industry-card-list"><CatalogIndustryCard v-for="(item, index) in industries" :key="item.id" :title="item.title" :class="{ 'is-entrance-visible': visibleCardCount > index + mainCategories.length }" @select="selectedIndustry = item.title" /></div>
@@ -73,7 +74,8 @@ onBeforeUnmount(() => {
 h1 { font-size: 35px; font-weight: 400; line-height: 1.4; letter-spacing: .05em; text-transform: uppercase; }
 .catalogue-hero { display: flex; flex: 1; overflow: hidden; }
 .catalogue-grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: 24px; align-content: start; padding-block: 48px 64px; }
-.catalogue-column { position: relative; grid-row: 1; z-index: 1; min-width: 0; }
+.catalogue-column { position: relative; grid-row: 1; z-index: 1; min-width: 0; transition: opacity 260ms ease, visibility 260ms; }
+.catalogue-column.is-debug-hidden { opacity: 0; visibility: hidden; pointer-events: none; }
 .catalogue-primary { grid-column: 1 / span 5; }
 .catalogue-industries { grid-column: 9 / span 4; }
 .catalogue-column h2 { margin-bottom: 16px; font-size: 36px; line-height: 1.4; font-weight: 400; letter-spacing: .05em; text-transform: uppercase; }
