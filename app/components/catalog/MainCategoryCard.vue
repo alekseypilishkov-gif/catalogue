@@ -1,6 +1,4 @@
 <script setup lang="ts">
-import hoverGlowAsset from '~/assets/images/undercard-hover.svg'
-
 withDefaults(defineProps<{
   title: string
   description: string
@@ -13,7 +11,7 @@ const { card, isCursorInside, enter, leave, moveCursor } = useCardCursorGlow()
 
 <template>
   <a ref="card" :href="href" class="catalogue-card main-card" :class="{ 'has-cursor-glow': isCursorInside }" :data-state="state" @mouseenter="enter" @mousemove="moveCursor" @mouseleave="leave">
-    <span class="card-cursor-glow" :style="{ backgroundImage: `url(${hoverGlowAsset})` }" aria-hidden="true" />
+    <span class="card-cursor-glow" aria-hidden="true" />
     <h3 class="main-card__title">{{ title }}</h3>
     <p class="main-card__description">{{ description }}</p>
   </a>

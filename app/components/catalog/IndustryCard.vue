@@ -1,6 +1,4 @@
 <script setup lang="ts">
-import hoverGlowAsset from '~/assets/images/undercard-hover.svg'
-
 withDefaults(defineProps<{ title: string; state?: 'idle' | 'hover' | 'active' }>(), { state: 'idle' })
 defineEmits<{ select: [] }>()
 
@@ -9,7 +7,7 @@ const { card, isCursorInside, enter, leave, moveCursor } = useCardCursorGlow()
 
 <template>
   <button ref="card" type="button" class="catalogue-card industry-card" :class="{ 'has-cursor-glow': isCursorInside }" :data-state="state" aria-haspopup="dialog" @mouseenter="enter" @mousemove="moveCursor" @mouseleave="leave" @click="$emit('select')">
-    <span class="card-cursor-glow" :style="{ backgroundImage: `url(${hoverGlowAsset})` }" aria-hidden="true" />
+    <span class="card-cursor-glow" aria-hidden="true" />
     <span class="industry-card__title">{{ title }}</span>
   </button>
 </template>
