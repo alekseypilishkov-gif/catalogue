@@ -16,6 +16,7 @@ const settings = reactive({
   rotationY: 0,
   rotationZ: 0,
   scale: 1,
+  verticalOffset: 0,
   cameraDistance: 1.2,
   pointSize: 0.006,
   opacity: 0.72,
@@ -58,6 +59,7 @@ function applySettings() {
   if (points) {
     points.rotation.set(settings.rotationX, settings.rotationY, settings.rotationZ)
     points.scale.setScalar(settings.scale)
+    points.position.z = settings.verticalOffset
   }
   if (material) {
     material.size = settings.pointSize
@@ -181,6 +183,7 @@ onBeforeUnmount(dispose)
           <label>Rotation Y <output>{{ settings.rotationY.toFixed(2) }}</output><input v-model.number="settings.rotationY" type="range" min="-3.14" max="3.14" step="0.01" /></label>
           <label>Rotation Z <output>{{ settings.rotationZ.toFixed(2) }}</output><input v-model.number="settings.rotationZ" type="range" min="-3.14" max="3.14" step="0.01" /></label>
           <label>Scale <output>{{ settings.scale.toFixed(2) }}</output><input v-model.number="settings.scale" type="range" min="0.25" max="2" step="0.01" /></label>
+          <label>Vertical offset <output>{{ settings.verticalOffset.toFixed(2) }}</output><input v-model.number="settings.verticalOffset" type="range" min="-1" max="1" step="0.01" /></label>
         </div>
         <div class="particle-debug__group">
           <h2>Camera</h2>
