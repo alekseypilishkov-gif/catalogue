@@ -10,7 +10,7 @@ const industryResults = computed(() => industries.filter(item => item.title.toLo
 </script>
 
 <template>
-  <header class="site-header" :style="{ '--header-wave': `url('${asset('images/header-wave.png')}')` }">
+  <header class="site-header">
     <div class="container header-glass">
       <nav class="header-left" aria-label="Каталог и поиск">
         <button class="header-catalogue" type="button" aria-haspopup="dialog" @click="panel = 'catalogue'">
@@ -63,7 +63,6 @@ const industryResults = computed(() => industries.filter(item => item.title.toLo
 
 <style scoped>
 .site-header { position: fixed; inset: 0 0 auto; z-index: 30; isolation: isolate; padding-top: 29px; background: transparent; }
-.site-header::before { content: ''; position: absolute; z-index: -1; inset: 0 0 auto; height: 137px; pointer-events: none; background: var(--header-wave) top center / cover no-repeat; mix-blend-mode: lighten; opacity: .5; }
 .header-glass { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; min-height: 64px; padding: 8px 12px; border: 1px solid rgb(137 137 137 / 40%); border-radius: 8px; background: rgb(38 38 38 / 30%); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); }
 .header-left, .header-right { display: flex; align-items: center; gap: 12px; }
 .header-right { justify-content: flex-end; }
