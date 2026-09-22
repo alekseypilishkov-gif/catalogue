@@ -8,11 +8,12 @@ export function useCardCursorGlow() {
   let targetY = 50
   let currentX = 50
   let currentY = 50
+  let followStrength = 0.14
 
   function animate() {
     animationFrame = undefined
-    currentX += (targetX - currentX) * 0.14
-    currentY += (targetY - currentY) * 0.14
+    currentX += (targetX - currentX) * followStrength
+    currentY += (targetY - currentY) * followStrength
     card.value?.style.setProperty('--cursor-glow-x', `${currentX}%`)
     card.value?.style.setProperty('--cursor-glow-y', `${currentY}%`)
 
@@ -29,6 +30,10 @@ export function useCardCursorGlow() {
     const bounds = card.value?.getBoundingClientRect()
     if (!bounds) return
 
+    const configuredFollow = Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--card-hover-follow'))
+    followStrength = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      ? 1
+      : Math.max(0.02, Math.min(1, configuredFollow || 0.14))
     targetX = ((event.clientX - bounds.left) / bounds.width) * 100
     targetY = ((event.clientY - bounds.top) / bounds.height) * 100
     requestAnimation()

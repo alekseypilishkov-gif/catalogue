@@ -36,6 +36,11 @@ const settings = reactive({
   idleStrength: 0.002,
   cursorTiltStrength: 0.025,
   ambientVisible: true,
+  cardHoverGlowSize: 397.4,
+  cardHoverGlowOpacity: 1,
+  cardHoverGlowIntensity: 1,
+  cardHoverGlowScale: 1,
+  cardHoverFollow: 0.14,
   showAxes: false,
   showGrid: false,
 })
@@ -287,6 +292,12 @@ function resetCursorTilt() {
 }
 
 function applySettings() {
+  const rootStyle = document.documentElement.style
+  rootStyle.setProperty('--card-hover-glow-size', `${settings.cardHoverGlowSize}px`)
+  rootStyle.setProperty('--card-hover-glow-opacity', String(settings.cardHoverGlowOpacity))
+  rootStyle.setProperty('--card-hover-glow-intensity', String(settings.cardHoverGlowIntensity))
+  rootStyle.setProperty('--card-hover-glow-scale', String(settings.cardHoverGlowScale))
+  rootStyle.setProperty('--card-hover-follow', String(settings.cardHoverFollow))
   applyParticleTransforms()
   if (logoMaterial) {
     logoMaterial.uniforms.uPointSize!.value = settings.pointSize
@@ -364,6 +375,12 @@ function dispose() {
   window.removeEventListener('pointermove', handlePointerMove)
   window.removeEventListener('blur', resetCursorTilt)
   document.documentElement.removeEventListener('pointerleave', resetCursorTilt)
+  const rootStyle = document.documentElement.style
+  rootStyle.removeProperty('--card-hover-glow-size')
+  rootStyle.removeProperty('--card-hover-glow-opacity')
+  rootStyle.removeProperty('--card-hover-glow-intensity')
+  rootStyle.removeProperty('--card-hover-glow-scale')
+  rootStyle.removeProperty('--card-hover-follow')
   renderer?.setAnimationLoop(null)
   logoGeometry?.dispose()
   logoMaterial?.dispose()
@@ -595,6 +612,14 @@ onBeforeUnmount(dispose)
             <label>Opacity <output>{{ settings.opacity.toFixed(2) }}</output><input v-model.number="settings.opacity" type="range" min="0.05" max="1" step="0.01" /></label>
             <label>Logo brightness <output>{{ settings.logoBrightness.toFixed(2) }}</output><input v-model.number="settings.logoBrightness" type="range" min="0.5" max="1.5" step="0.01" /></label>
             <label class="particle-debug__check"><input v-model="settings.ambientVisible" type="checkbox" /> Ambient particles</label>
+          </div>
+          <div class="particle-debug__group">
+            <h2>Card hover</h2>
+            <label>Glow size <output>{{ settings.cardHoverGlowSize.toFixed(1) }} px</output><input v-model.number="settings.cardHoverGlowSize" type="range" min="160" max="560" step="0.1" /></label>
+            <label>Glow opacity <output>{{ settings.cardHoverGlowOpacity.toFixed(2) }}</output><input v-model.number="settings.cardHoverGlowOpacity" type="range" min="0" max="1" step="0.05" /></label>
+            <label>Glow intensity <output>{{ settings.cardHoverGlowIntensity.toFixed(2) }}</output><input v-model.number="settings.cardHoverGlowIntensity" type="range" min="0.25" max="2" step="0.05" /></label>
+            <label>Glow scale <output>{{ settings.cardHoverGlowScale.toFixed(2) }}</output><input v-model.number="settings.cardHoverGlowScale" type="range" min="0.5" max="1.5" step="0.05" /></label>
+            <label>Follow response <output>{{ settings.cardHoverFollow.toFixed(2) }}</output><input v-model.number="settings.cardHoverFollow" type="range" min="0.02" max="0.5" step="0.01" /></label>
           </div>
           <div class="particle-debug__group particle-debug__switches">
             <h2>Debug</h2>
