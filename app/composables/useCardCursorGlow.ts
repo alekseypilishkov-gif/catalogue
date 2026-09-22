@@ -25,7 +25,7 @@ export function useCardCursorGlow() {
     if (animationFrame === undefined) animationFrame = window.requestAnimationFrame(animate)
   }
 
-  function moveCursor(event: PointerEvent) {
+  function moveCursor(event: MouseEvent) {
     const bounds = card.value?.getBoundingClientRect()
     if (!bounds) return
 
@@ -34,7 +34,7 @@ export function useCardCursorGlow() {
     requestAnimation()
   }
 
-  function enter(event: PointerEvent) {
+  function enter(event: MouseEvent) {
     isCursorInside.value = true
     moveCursor(event)
   }

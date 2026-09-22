@@ -8,7 +8,7 @@ const { card, isCursorInside, enter, leave, moveCursor } = useCardCursorGlow()
 </script>
 
 <template>
-  <button ref="card" type="button" class="catalogue-card industry-card" :class="{ 'has-cursor-glow': isCursorInside }" :data-state="state" aria-haspopup="dialog" @pointerenter="enter" @pointermove="moveCursor" @pointerleave="leave" @click="$emit('select')">
+  <button ref="card" type="button" class="catalogue-card industry-card" :class="{ 'has-cursor-glow': isCursorInside }" :data-state="state" aria-haspopup="dialog" @mouseenter="enter" @mousemove="moveCursor" @mouseleave="leave" @click="$emit('select')">
     <span class="card-cursor-glow" :style="{ backgroundImage: `url(${hoverGlowAsset})` }" aria-hidden="true" />
     <span>{{ title }}</span>
   </button>

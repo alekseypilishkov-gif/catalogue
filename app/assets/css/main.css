@@ -51,7 +51,7 @@ button:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid 
 .catalogue-card::before { content: ''; position: absolute; z-index: 0; inset: 0; background: var(--card-background); /* Figma: background blur 64px and #BBB2E0 at 5%, radius 16px. */ -webkit-backdrop-filter: blur(var(--card-blur)); backdrop-filter: blur(var(--card-blur)); pointer-events: none; }
 .catalogue-card > * { position: relative; z-index: 1; }
 .card-cursor-glow { position: absolute !important; z-index: 0 !important; width: 397.4px; height: 397.4px; left: var(--cursor-glow-x, 50%); top: var(--cursor-glow-y, 50%); opacity: 0; pointer-events: none; background-position: center; background-repeat: no-repeat; background-size: 100% 100%; transform: translate(-50%, -50%) scale(.88); transition: opacity 220ms ease, transform 360ms cubic-bezier(.22, 1, .36, 1); }
-.catalogue-card.has-cursor-glow .card-cursor-glow { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+.catalogue-card:hover .card-cursor-glow, .catalogue-card.has-cursor-glow .card-cursor-glow { opacity: 1; transform: translate(-50%, -50%) scale(1); }
 .accent-link, .text-button { color: var(--color-accent); text-decoration: underline; text-underline-offset: 3px; }
 .text-button { padding: 0; font-size: 13px; }
 .dialog-links { display: grid; gap: 0; }
