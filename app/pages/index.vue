@@ -20,12 +20,12 @@ const selectedIndustry = ref<string | null>(null)
             <section class="catalogue-column catalogue-primary" aria-labelledby="main-categories-title">
               <h2 id="main-categories-title">Основные</h2>
               <p class="section-description">Ознакомьтесь с ассортиментом и техническими данным нашей продукции</p>
-              <div class="main-card-list"><CatalogMainCategoryCard v-for="item in mainCategories" :key="item.id" :title="item.title" :description="item.description" :href="item.href" /></div>
+              <div class="main-card-list"><CatalogMainCategoryCard v-for="(item, index) in mainCategories" :key="item.id" :title="item.title" :description="item.description" :href="item.href" :style="{ '--entrance-index': index }" /></div>
             </section>
             <section class="catalogue-column catalogue-industries" aria-labelledby="industry-categories-title">
               <h2 id="industry-categories-title">По отраслям</h2>
               <p class="section-description">Выборка категорий продукции,<br class="desktop-break" /> отфильтрованная по конкретной отрасли</p>
-              <div class="industry-card-list"><CatalogIndustryCard v-for="item in industries" :key="item.id" :title="item.title" @select="selectedIndustry = item.title" /></div>
+              <div class="industry-card-list"><CatalogIndustryCard v-for="(item, index) in industries" :key="item.id" :title="item.title" :style="{ '--entrance-index': index + mainCategories.length }" @select="selectedIndustry = item.title" /></div>
             </section>
           </div>
         </section>
@@ -55,9 +55,12 @@ h1 { font-size: 36px; font-weight: 400; line-height: 1.4; letter-spacing: .05em;
 .section-description { max-width: 561px; min-height: 56px; margin-bottom: 24px; font-size: clamp(16px, 1.042vw, 20px); line-height: 1.4; letter-spacing: .05em; }
 .main-card-list { display: grid; gap: 24px; }
 .industry-card-list { display: grid; gap: 16px; }
+:deep(.catalogue-card) { animation: catalogue-card-entrance 600ms cubic-bezier(.22, 1, .36, 1) both; animation-delay: calc(var(--entrance-index) * 80ms); transform-origin: center top; }
 .hero-particles { position: fixed; top: 236px; left: 50%; z-index: 0; width: min(1102px, 57vw); aspect-ratio: 1102 / 774; transform: translateX(-50%); }
+@keyframes catalogue-card-entrance { from { opacity: 0; transform: perspective(1200px) rotateX(-70deg) translateY(40px); } to { opacity: 1; transform: perspective(1200px) rotateX(0deg) translateY(0); } }
 @media (min-width: 1200px) and (max-height: 900px) { .catalogue-grid { padding-block: 32px 48px; } .hero-particles { top: 228px; } .page-heading { padding-block: 110px 24px; } .catalogue-column h2 { margin-bottom: 12px; } .section-description { margin-bottom: 20px; } .industry-card-list { gap: 12px; } .industry-card-list :deep(.industry-card) { min-height: 64px; padding-block: 17px; } }
 @media (max-width: 1399px) { .catalogue-primary { grid-column: 1 / span 6; } .catalogue-industries { grid-column: 8 / span 5; } .desktop-break { display: none; } }
 @media (max-width: 999px) { .catalogue-grid { row-gap: 48px; padding-block: 40px 64px; } .catalogue-primary, .catalogue-industries { grid-column: 1 / -1; grid-row: auto; } .catalogue-primary { grid-row: 1; } .catalogue-industries { grid-row: 2; } .hero-particles { position: static; grid-column: 2 / -1; grid-row: 1 / 3; width: auto; margin: 0; transform: none; } .section-description { min-height: 0; max-width: 640px; } .main-card-list, .industry-card-list { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 599px) { .page-heading { padding-block: 96px 28px; } h1 { font-size: 28px; } .breadcrumbs { margin-bottom: 20px; font-size: 12px; } .catalogue-grid { row-gap: 44px; padding-top: 32px; } .catalogue-column h2 { font-size: 28px; margin-bottom: 12px; } .section-description { font-size: 16px; margin-bottom: 24px; } .main-card-list, .industry-card-list { grid-template-columns: 1fr; gap: 16px; } .hero-particles { grid-column: 1 / -1; margin-inline: -16px; margin-top: 70px; width: calc(100% + 32px); } }
+@media (prefers-reduced-motion: reduce) { :deep(.catalogue-card) { animation: none; } }
 </style>
