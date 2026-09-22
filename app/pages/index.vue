@@ -38,7 +38,7 @@ onBeforeUnmount(() => {
         </div>
         <section class="catalogue-hero" aria-label="Выбор каталога">
           <div class="container catalogue-grid">
-            <ParticlesParticleCanvas class="hero-particles" mode="logo" />
+            <ParticlesParticleLogo class="hero-particles" />
             <section class="catalogue-column catalogue-primary" aria-labelledby="main-categories-title">
               <h2 id="main-categories-title">Основные</h2>
               <p class="section-description">Ознакомьтесь с ассортиментом и техническими данным нашей продукции</p>
