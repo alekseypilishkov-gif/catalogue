@@ -43,7 +43,7 @@ const pendingSection = ref<string | null>(null)
 </template>
 
 <style scoped>
-.site-footer { padding-block: 78px 48px; border-top: 2px solid var(--color-accent); font-size: 14px; font-weight: 500; }
+.site-footer { position: relative; z-index: 2; padding-block: 78px 48px; border-top: 2px solid var(--color-accent); background: var(--color-bg); font-size: 14px; font-weight: 500; }
 .footer-logo, .footer-logo img { display: block; width: 94px; height: 41px; }
 .footer-logo { margin-bottom: 32px; }
 .footer-top, .footer-bottom { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; }
