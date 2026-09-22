@@ -25,14 +25,14 @@
   --page-gutter: clamp(24px, 4.791667vw, 92px);
   --grid-gap: 24px;
   --card-background: rgb(137 137 137 / 5%);
-  --card-border: transparent;
-  --card-glow: transparent;
+  --card-border: rgb(137 137 137 / 24%);
+  --card-shadow: 0 0 16px rgb(187 178 224 / 5%);
   --card-title-color: var(--color-text);
   --card-hover-title-color: var(--color-accent);
   --card-hover-border: rgb(255 236 0 / 24%);
   --card-hover-glow: rgb(255 236 0 / 12%);
   --card-radius: 8px;
-  --card-blur: 32px;
+  --card-blur: 64px;
 }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -47,7 +47,7 @@ button:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid 
 ::selection { color: var(--color-bg-secondary); background: var(--color-accent); }
 .container { width: calc(100% - var(--page-gutter) * 2); max-width: 1736px; margin-inline: auto; }
 .icon-button { display: inline-flex; justify-content: center; align-items: center; width: 48px; min-height: 48px; padding: 0; border-radius: 8px; }
-.catalogue-card { border: 1px solid var(--card-border); border-radius: var(--card-radius); background: var(--card-background); backdrop-filter: blur(var(--card-blur)); -webkit-backdrop-filter: blur(var(--card-blur)); box-shadow: 0 0 16px rgb(187 178 224 / 5%), 0 0 40px var(--card-glow); color: var(--color-text); }
+.catalogue-card { position: relative; border: 1px solid var(--card-border); border-radius: var(--card-radius); background: var(--card-background); /* Figma: background blur 64px and #BBB2E0 at 5%, radius 16px. */ -webkit-backdrop-filter: blur(64px); backdrop-filter: blur(64px); box-shadow: var(--card-shadow); color: var(--color-text); }
 /* State API and tokens are reserved. Hover/active visuals and morphing are intentionally deferred. */
 .accent-link, .text-button { color: var(--color-accent); text-decoration: underline; text-underline-offset: 3px; }
 .text-button { padding: 0; font-size: 13px; }

@@ -62,9 +62,9 @@ const industryResults = computed(() => industries.filter(item => item.title.toLo
 </template>
 
 <style scoped>
-.site-header { position: relative; isolation: isolate; padding-top: 29px; background: var(--color-bg-secondary); }
+.site-header { position: fixed; inset: 0 0 auto; z-index: 30; isolation: isolate; padding-top: 29px; background: transparent; }
 .site-header::before { content: ''; position: absolute; z-index: -1; inset: 0 0 auto; height: 137px; pointer-events: none; background: var(--header-wave) top center / cover no-repeat; mix-blend-mode: lighten; opacity: .5; }
-.header-glass { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; min-height: 67px; padding: 8px 12px; border: 1px solid #ffffff1a; border-radius: 10px; background: linear-gradient(115deg, #8989890d, #ffffff03); backdrop-filter: blur(32px); box-shadow: 0 0 16px #bbb2e005; }
+.header-glass { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; min-height: 64px; padding: 8px 12px; border: 1px solid rgb(137 137 137 / 40%); border-radius: 8px; background: rgb(38 38 38 / 30%); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); }
 .header-left, .header-right { display: flex; align-items: center; gap: 12px; }
 .header-right { justify-content: flex-end; }
 .header-catalogue, .header-city { display: flex; align-items: center; justify-content: center; gap: 20px; min-height: 48px; padding: 12px 31px; font-size: 16px; font-weight: 500; letter-spacing: .05em; text-transform: uppercase; border-radius: 8px; }
