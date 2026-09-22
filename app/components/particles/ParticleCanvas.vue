@@ -14,6 +14,6 @@ const asset = useAssetUrl()
 </template>
 
 <style scoped>
-.particle-canvas { pointer-events: none; user-select: none; overflow: hidden; mix-blend-mode: lighten; opacity: .8; }
+.particle-canvas { pointer-events: none; user-select: none; overflow: hidden; }
 .particle-canvas img { display: block; width: 100%; height: 100%; object-fit: cover; }
 </style>
