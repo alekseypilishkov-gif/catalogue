@@ -13,7 +13,7 @@ const emit = defineEmits<{
 
 const canvas = ref<HTMLCanvasElement | null>(null)
 const asset = useAssetUrl()
-const isDebugPanelOpen = ref(true)
+const isDebugPanelOpen = ref(false)
 const cameraView = ref<'front' | 'perspective'>('front')
 const settings = reactive({
   rotationX: 0,
