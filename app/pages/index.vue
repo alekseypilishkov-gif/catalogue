@@ -70,7 +70,7 @@ onBeforeUnmount(() => {
 .catalogue-main { display: flex; flex-direction: column; flex: 1; outline: none; }
 .page-heading { padding-block: 110px 32px; background: var(--color-bg-secondary); }
 .breadcrumbs { display: flex; align-items: center; gap: 12px; margin-bottom: 24px; font-size: 14px; line-height: 20px; letter-spacing: .05em; text-transform: uppercase; }
-h1 { font-size: 36px; font-weight: 400; line-height: 1.4; letter-spacing: .05em; text-transform: uppercase; }
+h1 { font-size: 35px; font-weight: 400; line-height: 1.4; letter-spacing: .05em; text-transform: uppercase; }
 .catalogue-hero { display: flex; flex: 1; overflow: hidden; }
 .catalogue-grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: 24px; align-content: start; padding-block: 48px 64px; }
 .catalogue-column { position: relative; grid-row: 1; z-index: 1; min-width: 0; }
