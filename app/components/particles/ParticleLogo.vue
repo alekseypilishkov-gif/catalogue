@@ -7,6 +7,8 @@ interface PointData {
   positions: Array<{ x: number, y: number, z: number }>
 }
 
+type ParticleState = 'galaxy' | 'transition' | 'logo'
+
 const emit = defineEmits<{
   introStart: [reducedMotion: boolean]
 }>()
@@ -30,7 +32,11 @@ const settings = reactive({
   particleSizeVariation: 0.45,
   opacity: 0.67,
   logoBrightness: 1,
-  introDuration: 1.45,
+  galaxyRadius: 0.68,
+  galaxyRotationSpeed: 0.08,
+  galaxyTurbulence: 0.018,
+  transitionDuration: 1.05,
+  ambientIntensity: 0.18,
   flowStrength: 0.24,
   turbulenceStrength: 0.055,
   idleStrength: 0.002,
@@ -46,14 +52,17 @@ const settings = reactive({
 })
 
 const logoVertexShader = `
-  attribute vec3 startPosition;
+  attribute vec3 galaxyPosition;
   attribute vec3 randomSeed;
   attribute float phase;
   attribute float delay;
   attribute float sizeVariation;
 
   uniform float uTime;
-  uniform float uIntroProgress;
+  uniform float uTransitionProgress;
+  uniform float uGalaxyRadius;
+  uniform float uGalaxyRotationSpeed;
+  uniform float uGalaxyTurbulence;
   uniform float uFlowStrength;
   uniform float uTurbulenceStrength;
   uniform float uIdleStrength;
@@ -64,6 +73,7 @@ const logoVertexShader = `
   uniform float uSizeVariation;
 
   varying float vDepthBrightness;
+  varying float vTransitionProgress;
 
   float easeOutCubic(float value) {
     float inverse = 1.0 - value;
@@ -71,7 +81,7 @@ const logoVertexShader = `
   }
 
   void main() {
-    float localProgress = clamp((uIntroProgress - delay) / max(0.001, 1.0 - delay), 0.0, 1.0);
+    float localProgress = clamp((uTransitionProgress - delay) / max(0.001, 1.0 - delay), 0.0, 1.0);
     float easedProgress = easeOutCubic(localProgress);
     float flowWindow = sin(localProgress * 3.14159265) * (1.0 - localProgress * 0.25);
     float turbulenceWindow = (1.0 - localProgress) * sin(localProgress * 3.14159265);
@@ -88,8 +98,21 @@ const logoVertexShader = `
       sin(phase * 2.7 + localProgress * 15.0)
     ) * uTurbulenceStrength * turbulenceWindow;
 
-    vec3 animatedPosition = mix(startPosition, position, easedProgress) + curvedFlow + turbulence;
-    float idleEnvelope = smoothstep(0.72, 1.0, uIntroProgress);
+    vec3 scaledGalaxyPosition = galaxyPosition * uGalaxyRadius;
+    float orbitalSpeed = uGalaxyRotationSpeed * (0.55 + abs(randomSeed.y) * 0.65);
+    float orbitalAngle = uTime * orbitalSpeed;
+    float orbitalCos = cos(orbitalAngle);
+    float orbitalSin = sin(orbitalAngle);
+    vec2 orbitalPosition = mat2(orbitalCos, -orbitalSin, orbitalSin, orbitalCos) * scaledGalaxyPosition.xz;
+    vec3 animatedGalaxyPosition = vec3(orbitalPosition.x, scaledGalaxyPosition.y, orbitalPosition.y);
+    animatedGalaxyPosition += vec3(
+      sin(uTime * 0.31 + phase * 1.7),
+      cos(uTime * 0.27 + phase * 1.13),
+      sin(uTime * 0.29 + phase * 1.41)
+    ) * uGalaxyTurbulence * (1.0 - easedProgress);
+
+    vec3 animatedPosition = mix(animatedGalaxyPosition, position, easedProgress) + curvedFlow + turbulence;
+    float idleEnvelope = smoothstep(0.72, 1.0, uTransitionProgress);
     vec3 idleOffset = vec3(
       sin(uTime * 0.72 + phase),
       cos(uTime * 0.58 + phase * 1.21),
@@ -103,17 +126,21 @@ const logoVertexShader = `
     float perspectiveScale = mix(1.0, 1.0 / cameraDepth, uSizeAttenuation);
     float individualSize = mix(1.0, sizeVariation, uSizeVariation);
     vDepthBrightness = clamp(0.86 + perspectiveScale * 0.14, 0.86, 1.12);
+    vTransitionProgress = easedProgress;
     gl_Position = projectionMatrix * modelViewPosition;
-    gl_PointSize = clamp(uPointSize * uViewportHeight * 0.5 * individualSize * perspectiveScale, 0.9, 8.0);
+    float stateSize = mix(0.42, 1.0, easedProgress);
+    gl_PointSize = clamp(uPointSize * uViewportHeight * 0.5 * individualSize * perspectiveScale * stateSize, 0.75, 8.0);
   }
 `
 
 const logoFragmentShader = `
+  uniform vec3 uGalaxyColor;
   uniform vec3 uColor;
   uniform float uOpacity;
   uniform float uBrightness;
 
   varying float vDepthBrightness;
+  varying float vTransitionProgress;
 
   void main() {
     float distanceToCenter = distance(gl_PointCoord, vec2(0.5));
@@ -121,7 +148,8 @@ const logoFragmentShader = `
     float halo = 1.0 - smoothstep(0.34, 0.50, distanceToCenter);
     float particleAlpha = min(1.0, core + halo * 0.20);
     if (particleAlpha <= 0.0) discard;
-    gl_FragColor = vec4(uColor * uBrightness * vDepthBrightness, uOpacity * particleAlpha);
+    vec3 particleColor = mix(uGalaxyColor, uColor, smoothstep(0.12, 0.92, vTransitionProgress));
+    gl_FragColor = vec4(particleColor * uBrightness * vDepthBrightness, uOpacity * particleAlpha);
   }
 `
 
@@ -191,19 +219,24 @@ let logoPoints: THREE.Points | undefined
 let ambientPoints: THREE.Points | undefined
 let axesHelper: THREE.AxesHelper | undefined
 let gridHelper: THREE.GridHelper | undefined
-let introStartTime = 0
+let transitionStartTime = 0
 let lastFrameTime = 0
 let reducedMotion = false
 let disposed = false
+let transitionOverride = false
+let lastProgressUiUpdate = 0
 let pointerTargetX = 0
 let pointerTargetY = 0
 let cursorTiltX = 0
 let cursorTiltZ = 0
 
 /** CPU-side position sets stay isolated so a future morph can replace the target safely. */
-let startPositions: Float32Array | undefined
+let galaxyPositions: Float32Array | undefined
 let currentPositions: Float32Array | undefined
 let targetPositions: Float32Array | undefined
+const transitionProgress = ref(0)
+const particleState = ref<ParticleState>('galaxy')
+const transitionDelay = 0.9
 
 function renderScene() {
   if (renderer && scene && camera) renderer.render(scene, camera)
@@ -213,9 +246,17 @@ function animate(time: number) {
   if (!renderer || !scene || !camera || !logoMaterial || !ambientMaterial) return
   const deltaSeconds = lastFrameTime ? Math.min((time - lastFrameTime) / 1000, 0.05) : 0
   lastFrameTime = time
-  const elapsedSeconds = Math.max(0, time - introStartTime) / 1000
+  const elapsedSeconds = Math.max(0, time - transitionStartTime) / 1000
+  const automaticProgress = Math.max(0, Math.min(1, (elapsedSeconds - transitionDelay) / settings.transitionDuration))
+  const activeProgress = transitionOverride ? transitionProgress.value : automaticProgress
+  const nextState: ParticleState = activeProgress <= 0 ? 'galaxy' : activeProgress >= 1 ? 'logo' : 'transition'
+  if (particleState.value !== nextState) particleState.value = nextState
   logoMaterial.uniforms.uTime!.value = time / 1000
-  logoMaterial.uniforms.uIntroProgress!.value = Math.min(1, elapsedSeconds / settings.introDuration)
+  logoMaterial.uniforms.uTransitionProgress!.value = activeProgress
+  if (!transitionOverride && (time - lastProgressUiUpdate > 50 || activeProgress >= 1)) {
+    transitionProgress.value = activeProgress
+    lastProgressUiUpdate = time
+  }
   ambientMaterial.uniforms.uTime!.value = time / 1000
   updateCursorTilt(deltaSeconds)
   renderer.render(scene, camera)
@@ -270,8 +311,8 @@ function applyParticleTransforms() {
 
 function updateCursorTilt(deltaSeconds: number) {
   if (!logoMaterial) return
-  const introProgress = Number(logoMaterial.uniforms.uIntroProgress!.value)
-  const interactionEnvelope = Math.max(0, Math.min(1, (introProgress - 0.72) / 0.28))
+  const activeTransitionProgress = Number(logoMaterial.uniforms.uTransitionProgress!.value)
+  const interactionEnvelope = Math.max(0, Math.min(1, (activeTransitionProgress - 0.72) / 0.28))
   const targetX = reducedMotion ? 0 : pointerTargetY * settings.cursorTiltStrength * interactionEnvelope
   const targetZ = reducedMotion ? 0 : -pointerTargetX * settings.cursorTiltStrength * interactionEnvelope
   const smoothing = 1 - Math.exp(-deltaSeconds * 6.5)
@@ -305,6 +346,9 @@ function applySettings() {
     logoMaterial.uniforms.uLogoDepthSpread!.value = settings.logoDepthSpread
     logoMaterial.uniforms.uSizeVariation!.value = settings.particleSizeVariation
     logoMaterial.uniforms.uOpacity!.value = settings.opacity
+    logoMaterial.uniforms.uGalaxyRadius!.value = settings.galaxyRadius
+    logoMaterial.uniforms.uGalaxyRotationSpeed!.value = reducedMotion ? 0 : settings.galaxyRotationSpeed
+    logoMaterial.uniforms.uGalaxyTurbulence!.value = reducedMotion ? 0 : settings.galaxyTurbulence
     logoMaterial.uniforms.uFlowStrength!.value = settings.flowStrength
     logoMaterial.uniforms.uTurbulenceStrength!.value = settings.turbulenceStrength
     logoMaterial.uniforms.uIdleStrength!.value = reducedMotion ? 0 : settings.idleStrength
@@ -314,6 +358,7 @@ function applySettings() {
     ambientMaterial.uniforms.uSizeAttenuation!.value = settings.sizeAttenuation
     ambientMaterial.uniforms.uAmbientDepthSpread!.value = settings.ambientDepthSpread
     ambientMaterial.uniforms.uSizeVariation!.value = settings.particleSizeVariation
+    ambientMaterial.uniforms.uOpacity!.value = settings.ambientIntensity
   }
   if (ambientPoints) ambientPoints.visible = settings.ambientVisible && !reducedMotion
   if (axesHelper) axesHelper.visible = settings.showAxes
@@ -329,8 +374,20 @@ function setCameraView(view: 'front' | 'perspective') {
 
 function restartIntro() {
   if (reducedMotion || !logoMaterial) return
-  introStartTime = performance.now()
-  logoMaterial.uniforms.uIntroProgress!.value = 0
+  transitionOverride = false
+  transitionProgress.value = 0
+  particleState.value = 'galaxy'
+  transitionStartTime = performance.now()
+  logoMaterial.uniforms.uTransitionProgress!.value = 0
+}
+
+function setTransitionProgress(event: Event) {
+  const input = event.target as HTMLInputElement
+  transitionOverride = true
+  transitionProgress.value = Number(input.value)
+  particleState.value = transitionProgress.value <= 0 ? 'galaxy' : transitionProgress.value >= 1 ? 'logo' : 'transition'
+  if (logoMaterial) logoMaterial.uniforms.uTransitionProgress!.value = transitionProgress.value
+  if (reducedMotion) renderScene()
 }
 
 watch(settings, applySettings, { deep: true })
@@ -359,10 +416,13 @@ function handleReducedMotion(event: MediaQueryListEvent) {
     cursorTiltZ = 0
   }
   if (logoMaterial) {
-    logoMaterial.uniforms.uIntroProgress!.value = reducedMotion ? 1 : 0
+    logoMaterial.uniforms.uTransitionProgress!.value = reducedMotion ? 1 : 0
     logoMaterial.uniforms.uIdleStrength!.value = reducedMotion ? 0 : settings.idleStrength
   }
-  if (!reducedMotion) introStartTime = performance.now()
+  transitionOverride = false
+  transitionProgress.value = reducedMotion ? 1 : 0
+  particleState.value = reducedMotion ? 'logo' : 'galaxy'
+  if (!reducedMotion) transitionStartTime = performance.now()
   lastFrameTime = 0
   applySettings()
   syncAnimationLoop()
@@ -399,8 +459,11 @@ function dispose() {
   axesHelper = undefined
   gridHelper = undefined
   currentPositions = undefined
-  startPositions = undefined
+  galaxyPositions = undefined
   targetPositions = undefined
+  transitionOverride = false
+  transitionProgress.value = 0
+  particleState.value = 'galaxy'
   pointerTargetX = 0
   pointerTargetY = 0
   cursorTiltX = 0
@@ -423,7 +486,7 @@ onMounted(async () => {
     const random = createRandom(sessionSeed)
     const pointCount = data.positions.length
     targetPositions = new Float32Array(pointCount * 3)
-    startPositions = new Float32Array(pointCount * 3)
+    galaxyPositions = new Float32Array(pointCount * 3)
     const randomSeeds = new Float32Array(pointCount * 3)
     const phases = new Float32Array(pointCount)
     const delays = new Float32Array(pointCount)
@@ -431,15 +494,21 @@ onMounted(async () => {
 
     data.positions.forEach(({ x, y, z }, index) => {
       const offset = index * 3
-      const angle = random() * Math.PI * 2
-      const radius = Math.pow(random(), 0.58)
-      const verticalAngle = (random() - 0.5) * Math.PI
+      const isCoreParticle = random() < 0.14
+      const armIndex = index % 3
+      const normalizedRadius = isCoreParticle ? Math.pow(random(), 1.8) * 0.25 : Math.pow(random(), 0.74)
+      const armAngle = armIndex / 3 * Math.PI * 2
+      const spiralAngle = isCoreParticle
+        ? random() * Math.PI * 2
+        : armAngle + normalizedRadius * Math.PI * 2.35 + (random() - 0.5) * (0.12 + normalizedRadius * 0.16)
+      const depthLayerIndex = index % 3 - 1
+      const depthLayer = depthLayerIndex * 0.07 + (random() - 0.5) * (0.025 + normalizedRadius * 0.05)
       targetPositions![offset] = x
       targetPositions![offset + 1] = y
       targetPositions![offset + 2] = z
-      startPositions![offset] = Math.cos(angle) * radius * (0.58 + random() * 0.48)
-      startPositions![offset + 1] = (random() - 0.5) * (0.34 + radius * 0.32)
-      startPositions![offset + 2] = 0.22 + Math.sin(verticalAngle) * radius * (0.34 + random() * 0.28)
+      galaxyPositions![offset] = Math.cos(spiralAngle) * normalizedRadius
+      galaxyPositions![offset + 1] = depthLayer
+      galaxyPositions![offset + 2] = 0.22 + Math.sin(spiralAngle) * normalizedRadius * 0.56 + (random() - 0.5) * 0.025
       randomSeeds[offset] = random() * 2 - 1
       randomSeeds[offset + 1] = random() * 2 - 1
       randomSeeds[offset + 2] = random() * 2 - 1
@@ -447,7 +516,7 @@ onMounted(async () => {
       delays[index] = Math.pow(random(), 1.8) * 0.14
       logoSizes[index] = 0.9 + random() * 0.2
     })
-    currentPositions = startPositions.slice()
+    currentPositions = galaxyPositions.slice()
 
     const accentColor = getComputedStyle(document.documentElement).getPropertyValue('--color-accent').trim() || '#ffec00'
     scene = new three.Scene()
@@ -456,7 +525,7 @@ onMounted(async () => {
 
     logoGeometry = new three.BufferGeometry()
     logoGeometry.setAttribute('position', new three.BufferAttribute(targetPositions, 3))
-    logoGeometry.setAttribute('startPosition', new three.BufferAttribute(startPositions, 3))
+    logoGeometry.setAttribute('galaxyPosition', new three.BufferAttribute(galaxyPositions, 3))
     logoGeometry.setAttribute('randomSeed', new three.BufferAttribute(randomSeeds, 3))
     logoGeometry.setAttribute('phase', new three.BufferAttribute(phases, 1))
     logoGeometry.setAttribute('delay', new three.BufferAttribute(delays, 1))
@@ -466,7 +535,10 @@ onMounted(async () => {
       fragmentShader: logoFragmentShader,
       uniforms: {
         uTime: { value: 0 },
-        uIntroProgress: { value: 0 },
+        uTransitionProgress: { value: 0 },
+        uGalaxyRadius: { value: settings.galaxyRadius },
+        uGalaxyRotationSpeed: { value: settings.galaxyRotationSpeed },
+        uGalaxyTurbulence: { value: settings.galaxyTurbulence },
         uFlowStrength: { value: settings.flowStrength },
         uTurbulenceStrength: { value: settings.turbulenceStrength },
         uIdleStrength: { value: settings.idleStrength },
@@ -475,6 +547,7 @@ onMounted(async () => {
         uSizeAttenuation: { value: settings.sizeAttenuation },
         uLogoDepthSpread: { value: settings.logoDepthSpread },
         uSizeVariation: { value: settings.particleSizeVariation },
+        uGalaxyColor: { value: new three.Color('#e8f1f0') },
         uColor: { value: new three.Color(accentColor) },
         uOpacity: { value: settings.opacity },
         uBrightness: { value: settings.logoBrightness },
@@ -525,7 +598,7 @@ onMounted(async () => {
         uAmbientDepthSpread: { value: settings.ambientDepthSpread },
         uSizeVariation: { value: settings.particleSizeVariation },
         uColor: { value: new three.Color('#c9d0cf') },
-        uOpacity: { value: 0.18 },
+        uOpacity: { value: settings.ambientIntensity },
       },
       transparent: true,
       depthWrite: false,
@@ -548,14 +621,16 @@ onMounted(async () => {
 
     reducedMotionQuery = window.matchMedia('(prefers-reduced-motion: reduce)')
     reducedMotion = reducedMotionQuery.matches
-    logoMaterial.uniforms.uIntroProgress!.value = reducedMotion ? 1 : 0
+    logoMaterial.uniforms.uTransitionProgress!.value = reducedMotion ? 1 : 0
     reducedMotionQuery.addEventListener('change', handleReducedMotion)
     window.addEventListener('pointermove', handlePointerMove, { passive: true })
     window.addEventListener('blur', resetCursorTilt)
     document.documentElement.addEventListener('pointerleave', resetCursorTilt)
     resizeObserver = new ResizeObserver(resize)
     resizeObserver.observe(canvas.value)
-    introStartTime = performance.now()
+    transitionStartTime = performance.now()
+    transitionProgress.value = reducedMotion ? 1 : 0
+    particleState.value = reducedMotion ? 'logo' : 'galaxy'
     applySettings()
     resize()
     emit('introStart', reducedMotion)
@@ -595,12 +670,20 @@ onBeforeUnmount(dispose)
           </div>
           <div class="particle-debug__group">
             <h2>Formation</h2>
-            <label>Intro duration <output>{{ settings.introDuration.toFixed(2) }} s</output><input v-model.number="settings.introDuration" type="range" min="1.2" max="1.6" step="0.01" /></label>
             <label>Flow strength <output>{{ settings.flowStrength.toFixed(3) }}</output><input v-model.number="settings.flowStrength" type="range" min="0" max="0.5" step="0.005" /></label>
             <label>Turbulence <output>{{ settings.turbulenceStrength.toFixed(3) }}</output><input v-model.number="settings.turbulenceStrength" type="range" min="0" max="0.2" step="0.005" /></label>
             <label>Idle strength <output>{{ settings.idleStrength.toFixed(3) }}</output><input v-model.number="settings.idleStrength" type="range" min="0" max="0.02" step="0.001" /></label>
             <label>Cursor tilt <output>{{ settings.cursorTiltStrength.toFixed(3) }}</output><input v-model.number="settings.cursorTiltStrength" type="range" min="0" max="0.08" step="0.001" /></label>
             <button class="particle-debug__wide-action" type="button" @click="restartIntro">Replay intro</button>
+          </div>
+          <div class="particle-debug__group">
+            <h2>Galaxy</h2>
+            <label>Galaxy radius <output>{{ settings.galaxyRadius.toFixed(2) }}</output><input v-model.number="settings.galaxyRadius" type="range" min="0.35" max="1.5" step="0.01" /></label>
+            <label>Rotation speed <output>{{ settings.galaxyRotationSpeed.toFixed(3) }}</output><input v-model.number="settings.galaxyRotationSpeed" type="range" min="-0.3" max="0.3" step="0.005" /></label>
+            <label>Galaxy turbulence <output>{{ settings.galaxyTurbulence.toFixed(3) }}</output><input v-model.number="settings.galaxyTurbulence" type="range" min="0" max="0.08" step="0.001" /></label>
+            <label>Transition progress <output>{{ transitionProgress.toFixed(2) }}</output><input :value="transitionProgress" type="range" min="0" max="1" step="0.01" @input="setTransitionProgress" /></label>
+            <label>Transition duration <output>{{ settings.transitionDuration.toFixed(2) }} s</output><input v-model.number="settings.transitionDuration" type="range" min="0.5" max="2.5" step="0.05" /></label>
+            <label>Ambient intensity <output>{{ settings.ambientIntensity.toFixed(2) }}</output><input v-model.number="settings.ambientIntensity" type="range" min="0" max="0.6" step="0.01" /></label>
           </div>
           <div class="particle-debug__group">
             <h2>Particles</h2>
