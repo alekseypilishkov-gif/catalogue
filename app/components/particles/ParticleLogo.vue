@@ -21,8 +21,13 @@ const settings = reactive({
   rotationZ: 2.77,
   scale: 1,
   verticalOffset: 0,
+  cameraFov: 42,
   cameraDistance: 1.2,
   pointSize: 0.006,
+  sizeAttenuation: 1.15,
+  logoDepthSpread: 0.045,
+  ambientDepthSpread: 0.38,
+  particleSizeVariation: 0.7,
   opacity: 0.68,
   logoBrightness: 1,
   introDuration: 1.45,
@@ -40,6 +45,7 @@ const logoVertexShader = `
   attribute vec3 randomSeed;
   attribute float phase;
   attribute float delay;
+  attribute float sizeVariation;
 
   uniform float uTime;
   uniform float uIntroProgress;
@@ -48,6 +54,11 @@ const logoVertexShader = `
   uniform float uIdleStrength;
   uniform float uPointSize;
   uniform float uViewportHeight;
+  uniform float uSizeAttenuation;
+  uniform float uLogoDepthSpread;
+  uniform float uSizeVariation;
+
+  varying float vDepthBrightness;
 
   float easeOutCubic(float value) {
     float inverse = 1.0 - value;
@@ -82,8 +93,13 @@ const logoVertexShader = `
     animatedPosition += idleOffset;
 
     vec4 modelViewPosition = modelViewMatrix * vec4(animatedPosition, 1.0);
+    modelViewPosition.z += randomSeed.z * uLogoDepthSpread * easedProgress;
+    float cameraDepth = max(0.18, -modelViewPosition.z);
+    float perspectiveScale = mix(1.0, 1.0 / cameraDepth, uSizeAttenuation);
+    float individualSize = mix(1.0, sizeVariation, uSizeVariation);
+    vDepthBrightness = clamp(0.86 + perspectiveScale * 0.14, 0.86, 1.12);
     gl_Position = projectionMatrix * modelViewPosition;
-    gl_PointSize = clamp(uPointSize * uViewportHeight * 0.5 / max(0.15, -modelViewPosition.z), 1.0, 8.0);
+    gl_PointSize = clamp(uPointSize * uViewportHeight * 0.5 * individualSize * perspectiveScale, 0.9, 8.0);
   }
 `
 
@@ -92,23 +108,32 @@ const logoFragmentShader = `
   uniform float uOpacity;
   uniform float uBrightness;
 
+  varying float vDepthBrightness;
+
   void main() {
     float distanceToCenter = distance(gl_PointCoord, vec2(0.5));
     float core = 1.0 - smoothstep(0.20, 0.40, distanceToCenter);
     float halo = 1.0 - smoothstep(0.34, 0.50, distanceToCenter);
     float particleAlpha = min(1.0, core + halo * 0.20);
     if (particleAlpha <= 0.0) discard;
-    gl_FragColor = vec4(uColor * uBrightness, uOpacity * particleAlpha);
+    gl_FragColor = vec4(uColor * uBrightness * vDepthBrightness, uOpacity * particleAlpha);
   }
 `
 
 const ambientVertexShader = `
   attribute vec3 drift;
   attribute float phase;
+  attribute float depthSeed;
+  attribute float sizeVariation;
 
   uniform float uTime;
   uniform float uPointSize;
   uniform float uViewportHeight;
+  uniform float uSizeAttenuation;
+  uniform float uAmbientDepthSpread;
+  uniform float uSizeVariation;
+
+  varying float vDepthBrightness;
 
   void main() {
     float orbitSpeed = 0.012 + (sin(phase * 1.37) * 0.5 + 0.5) * 0.018;
@@ -122,8 +147,13 @@ const ambientVertexShader = `
       sin(uTime * 0.09 + phase * 0.83) * drift.z
     );
     vec4 modelViewPosition = modelViewMatrix * vec4(animatedPosition, 1.0);
+    modelViewPosition.z += depthSeed * uAmbientDepthSpread;
+    float cameraDepth = max(0.18, -modelViewPosition.z);
+    float perspectiveScale = mix(1.0, 1.0 / cameraDepth, uSizeAttenuation);
+    float individualSize = mix(1.0, sizeVariation, uSizeVariation);
+    vDepthBrightness = clamp(0.78 + perspectiveScale * 0.18, 0.76, 1.16);
     gl_Position = projectionMatrix * modelViewPosition;
-    gl_PointSize = clamp(uPointSize * uViewportHeight * 0.5 / max(0.15, -modelViewPosition.z), 0.8, 3.0);
+    gl_PointSize = clamp(uPointSize * uViewportHeight * 0.5 * individualSize * perspectiveScale, 0.7, 4.2);
   }
 `
 
@@ -131,13 +161,15 @@ const ambientFragmentShader = `
   uniform vec3 uColor;
   uniform float uOpacity;
 
+  varying float vDepthBrightness;
+
   void main() {
     float distanceToCenter = distance(gl_PointCoord, vec2(0.5));
     float core = 1.0 - smoothstep(0.18, 0.38, distanceToCenter);
     float halo = 1.0 - smoothstep(0.32, 0.50, distanceToCenter);
     float particleAlpha = min(1.0, core + halo * 0.14);
     if (particleAlpha <= 0.0) discard;
-    gl_FragColor = vec4(uColor, uOpacity * particleAlpha);
+    gl_FragColor = vec4(uColor * vDepthBrightness, uOpacity * particleAlpha);
   }
 `
 
@@ -205,6 +237,7 @@ function updateCamera() {
   if (!camera) return
 
   const { cameraDistance } = settings
+  camera.fov = settings.cameraFov
   camera.up.set(0, 0, 1)
   if (cameraView.value === 'front') {
     camera.position.set(0, cameraDistance, 0.22)
@@ -212,6 +245,7 @@ function updateCamera() {
     camera.position.set(cameraDistance * 0.58, cameraDistance, 0.22 + cameraDistance * 0.46)
   }
   camera.lookAt(0, 0, 0.22)
+  camera.updateProjectionMatrix()
 }
 
 function applyParticleTransforms() {
@@ -256,11 +290,19 @@ function applySettings() {
   applyParticleTransforms()
   if (logoMaterial) {
     logoMaterial.uniforms.uPointSize!.value = settings.pointSize
+    logoMaterial.uniforms.uSizeAttenuation!.value = settings.sizeAttenuation
+    logoMaterial.uniforms.uLogoDepthSpread!.value = settings.logoDepthSpread
+    logoMaterial.uniforms.uSizeVariation!.value = settings.particleSizeVariation
     logoMaterial.uniforms.uOpacity!.value = settings.opacity
     logoMaterial.uniforms.uFlowStrength!.value = settings.flowStrength
     logoMaterial.uniforms.uTurbulenceStrength!.value = settings.turbulenceStrength
     logoMaterial.uniforms.uIdleStrength!.value = reducedMotion ? 0 : settings.idleStrength
     logoMaterial.uniforms.uBrightness!.value = settings.logoBrightness
+  }
+  if (ambientMaterial) {
+    ambientMaterial.uniforms.uSizeAttenuation!.value = settings.sizeAttenuation
+    ambientMaterial.uniforms.uAmbientDepthSpread!.value = settings.ambientDepthSpread
+    ambientMaterial.uniforms.uSizeVariation!.value = settings.particleSizeVariation
   }
   if (ambientPoints) ambientPoints.visible = settings.ambientVisible && !reducedMotion
   if (axesHelper) axesHelper.visible = settings.showAxes
@@ -368,6 +410,7 @@ onMounted(async () => {
     const randomSeeds = new Float32Array(pointCount * 3)
     const phases = new Float32Array(pointCount)
     const delays = new Float32Array(pointCount)
+    const logoSizes = new Float32Array(pointCount)
 
     data.positions.forEach(({ x, y, z }, index) => {
       const offset = index * 3
@@ -385,6 +428,7 @@ onMounted(async () => {
       randomSeeds[offset + 2] = random() * 2 - 1
       phases[index] = random() * Math.PI * 2
       delays[index] = Math.pow(random(), 1.8) * 0.14
+      logoSizes[index] = 0.9 + random() * 0.2
     })
     currentPositions = startPositions.slice()
 
@@ -399,6 +443,7 @@ onMounted(async () => {
     logoGeometry.setAttribute('randomSeed', new three.BufferAttribute(randomSeeds, 3))
     logoGeometry.setAttribute('phase', new three.BufferAttribute(phases, 1))
     logoGeometry.setAttribute('delay', new three.BufferAttribute(delays, 1))
+    logoGeometry.setAttribute('sizeVariation', new three.BufferAttribute(logoSizes, 1))
     logoMaterial = new three.ShaderMaterial({
       vertexShader: logoVertexShader,
       fragmentShader: logoFragmentShader,
@@ -410,6 +455,9 @@ onMounted(async () => {
         uIdleStrength: { value: settings.idleStrength },
         uPointSize: { value: settings.pointSize },
         uViewportHeight: { value: 1 },
+        uSizeAttenuation: { value: settings.sizeAttenuation },
+        uLogoDepthSpread: { value: settings.logoDepthSpread },
+        uSizeVariation: { value: settings.particleSizeVariation },
         uColor: { value: new three.Color(accentColor) },
         uOpacity: { value: settings.opacity },
         uBrightness: { value: settings.logoBrightness },
@@ -427,6 +475,8 @@ onMounted(async () => {
     const ambientPositions = new Float32Array(ambientCount * 3)
     const ambientDrift = new Float32Array(ambientCount * 3)
     const ambientPhases = new Float32Array(ambientCount)
+    const ambientDepthSeeds = new Float32Array(ambientCount)
+    const ambientSizes = new Float32Array(ambientCount)
     for (let index = 0; index < ambientCount; index += 1) {
       const offset = index * 3
       const angle = random() * Math.PI * 2
@@ -438,11 +488,15 @@ onMounted(async () => {
       ambientDrift[offset + 1] = 0.006 + random() * 0.015
       ambientDrift[offset + 2] = 0.008 + random() * 0.018
       ambientPhases[index] = random() * Math.PI * 2
+      ambientDepthSeeds[index] = random() * 2 - 1
+      ambientSizes[index] = 0.62 + random() * 0.76
     }
     ambientGeometry = new three.BufferGeometry()
     ambientGeometry.setAttribute('position', new three.BufferAttribute(ambientPositions, 3))
     ambientGeometry.setAttribute('drift', new three.BufferAttribute(ambientDrift, 3))
     ambientGeometry.setAttribute('phase', new three.BufferAttribute(ambientPhases, 1))
+    ambientGeometry.setAttribute('depthSeed', new three.BufferAttribute(ambientDepthSeeds, 1))
+    ambientGeometry.setAttribute('sizeVariation', new three.BufferAttribute(ambientSizes, 1))
     ambientMaterial = new three.ShaderMaterial({
       vertexShader: ambientVertexShader,
       fragmentShader: ambientFragmentShader,
@@ -450,6 +504,9 @@ onMounted(async () => {
         uTime: { value: 0 },
         uPointSize: { value: 0.0028 },
         uViewportHeight: { value: 1 },
+        uSizeAttenuation: { value: settings.sizeAttenuation },
+        uAmbientDepthSpread: { value: settings.ambientDepthSpread },
+        uSizeVariation: { value: settings.particleSizeVariation },
         uColor: { value: new three.Color('#c9d0cf') },
         uOpacity: { value: 0.18 },
       },
@@ -515,6 +572,7 @@ onBeforeUnmount(dispose)
           </div>
           <div class="particle-debug__group">
             <h2>Camera</h2>
+            <label>FOV <output>{{ settings.cameraFov.toFixed(0) }}°</output><input v-model.number="settings.cameraFov" type="range" min="28" max="65" step="1" /></label>
             <label>Distance <output>{{ settings.cameraDistance.toFixed(2) }}</output><input v-model.number="settings.cameraDistance" type="range" min="0.5" max="3" step="0.01" /></label>
             <div class="particle-debug__actions"><button type="button" :class="{ 'is-active': cameraView === 'front' }" @click="setCameraView('front')">Front view</button><button type="button" :class="{ 'is-active': cameraView === 'perspective' }" @click="setCameraView('perspective')">Perspective view</button></div>
           </div>
@@ -530,6 +588,10 @@ onBeforeUnmount(dispose)
           <div class="particle-debug__group">
             <h2>Particles</h2>
             <label>Point size <output>{{ settings.pointSize.toFixed(3) }}</output><input v-model.number="settings.pointSize" type="range" min="0.001" max="0.02" step="0.001" /></label>
+            <label>Size attenuation <output>{{ settings.sizeAttenuation.toFixed(2) }}</output><input v-model.number="settings.sizeAttenuation" type="range" min="0" max="2" step="0.05" /></label>
+            <label>LD depth <output>{{ settings.logoDepthSpread.toFixed(3) }}</output><input v-model.number="settings.logoDepthSpread" type="range" min="0" max="0.15" step="0.005" /></label>
+            <label>Ambient depth <output>{{ settings.ambientDepthSpread.toFixed(2) }}</output><input v-model.number="settings.ambientDepthSpread" type="range" min="0" max="0.8" step="0.02" /></label>
+            <label>Size variation <output>{{ settings.particleSizeVariation.toFixed(2) }}</output><input v-model.number="settings.particleSizeVariation" type="range" min="0" max="1" step="0.05" /></label>
             <label>Opacity <output>{{ settings.opacity.toFixed(2) }}</output><input v-model.number="settings.opacity" type="range" min="0.05" max="1" step="0.01" /></label>
             <label>Logo brightness <output>{{ settings.logoBrightness.toFixed(2) }}</output><input v-model.number="settings.logoBrightness" type="range" min="0.5" max="1.5" step="0.01" /></label>
             <label class="particle-debug__check"><input v-model="settings.ambientVisible" type="checkbox" /> Ambient particles</label>
