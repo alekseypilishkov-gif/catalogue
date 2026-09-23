@@ -1,4 +1,5 @@
 export interface PolygonWaveSettings {
+  seed: number
   meshWidth: number
   meshDepth: number
   density: number
@@ -20,11 +21,28 @@ export interface PolygonWaveSettings {
   faceShimmer: number
   edgeFadeStrength: number
   depthFadeStrength: number
+  foregroundSoftnessEnabled: boolean
+  focusDistance: number
+  nearSoftnessRange: number
+  softNodeFraction: number
+  softnessStrength: number
+  highlightsEnabled: boolean
+  highlightFraction: number
+  highlightIntensity: number
+  highlightCycleDuration: number
+  connectedEdgeEmphasis: number
+  nodeHaloStrength: number
+  dynamicConnectionsEnabled: boolean
+  reconnectionInterval: number
+  maxChangingCells: number
+  connectionTransitionDuration: number
+  cellCooldown: number
   paused: boolean
   cardsHidden: boolean
 }
 
 export const POLYGON_WAVE_DEFAULTS: PolygonWaveSettings = {
+  seed: 260923,
   meshWidth: 1.34,
   meshDepth: 12,
   density: 1,
@@ -46,6 +64,22 @@ export const POLYGON_WAVE_DEFAULTS: PolygonWaveSettings = {
   faceShimmer: 0.52,
   edgeFadeStrength: 1.35,
   depthFadeStrength: 0.62,
+  foregroundSoftnessEnabled: true,
+  focusDistance: 10.5,
+  nearSoftnessRange: 3.4,
+  softNodeFraction: 0.24,
+  softnessStrength: 0.58,
+  highlightsEnabled: true,
+  highlightFraction: 0.13,
+  highlightIntensity: 1.25,
+  highlightCycleDuration: 6,
+  connectedEdgeEmphasis: 1.1,
+  nodeHaloStrength: 0.62,
+  dynamicConnectionsEnabled: true,
+  reconnectionInterval: 3,
+  maxChangingCells: 2,
+  connectionTransitionDuration: 0.8,
+  cellCooldown: 7,
   paused: false,
   cardsHidden: false,
 }

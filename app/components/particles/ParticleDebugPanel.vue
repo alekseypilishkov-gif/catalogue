@@ -5,6 +5,10 @@ type NumericSettingKey = {
   [Key in keyof PolygonWaveSettings]: PolygonWaveSettings[Key] extends number ? Key : never
 }[keyof PolygonWaveSettings]
 
+type BooleanSettingKey = {
+  [Key in keyof PolygonWaveSettings]: PolygonWaveSettings[Key] extends boolean ? Key : never
+}[keyof PolygonWaveSettings]
+
 interface DebugControl {
   key: NumericSettingKey
   label: string
@@ -15,18 +19,28 @@ interface DebugControl {
 
 interface DebugSection {
   title: string
+  toggleKey?: BooleanSettingKey
+  toggleLabel?: string
   controls: DebugControl[]
 }
 
 const route = useRoute()
-const isOpen = ref(false)
+const isOpen = ref(route.query.debug === '1')
+const copyStatus = ref('')
+const fallbackText = ref('')
 const { settings, reset } = usePolygonWaveDebug()
 const isDebugEnabled = computed(() => route.query.debug === '1')
+
+watch(isDebugEnabled, (enabled) => {
+  if (enabled) isOpen.value = true
+  else fallbackText.value = ''
+})
 
 const sections: DebugSection[] = [
   {
     title: 'Geometry',
     controls: [
+      { key: 'seed', label: 'Seed', min: 1, max: 999999, step: 1 },
       { key: 'meshWidth', label: 'Horizontal extent', min: 1.05, max: 1.8, step: 0.01 },
       { key: 'meshDepth', label: 'Mesh depth', min: 7, max: 18, step: 0.5 },
       { key: 'density', label: 'Vertex density', min: 0.65, max: 1.5, step: 0.05 },
@@ -65,11 +79,77 @@ const sections: DebugSection[] = [
       { key: 'depthFadeStrength', label: 'Depth fade', min: 0, max: 1, step: 0.01 },
     ],
   },
+  {
+    title: 'Foreground softness',
+    toggleKey: 'foregroundSoftnessEnabled',
+    toggleLabel: 'Enabled',
+    controls: [
+      { key: 'focusDistance', label: 'Focus distance', min: 5, max: 18, step: 0.1 },
+      { key: 'nearSoftnessRange', label: 'Near softness range', min: 0.5, max: 8, step: 0.1 },
+      { key: 'softNodeFraction', label: 'Soft node fraction', min: 0, max: 0.7, step: 0.01 },
+      { key: 'softnessStrength', label: 'Softness strength', min: 0, max: 1.4, step: 0.02 },
+    ],
+  },
+  {
+    title: 'Highlights',
+    toggleKey: 'highlightsEnabled',
+    toggleLabel: 'Enabled',
+    controls: [
+      { key: 'highlightFraction', label: 'Highlight fraction', min: 0.02, max: 0.35, step: 0.01 },
+      { key: 'highlightIntensity', label: 'Highlight intensity', min: 0, max: 3, step: 0.05 },
+      { key: 'highlightCycleDuration', label: 'Cycle duration', min: 3, max: 14, step: 0.25 },
+      { key: 'connectedEdgeEmphasis', label: 'Connected edges', min: 0, max: 3, step: 0.05 },
+      { key: 'nodeHaloStrength', label: 'Node halo', min: 0, max: 1.5, step: 0.02 },
+    ],
+  },
+  {
+    title: 'Dynamic connections',
+    toggleKey: 'dynamicConnectionsEnabled',
+    toggleLabel: 'Enabled',
+    controls: [
+      { key: 'reconnectionInterval', label: 'Interval', min: 1.5, max: 8, step: 0.1 },
+      { key: 'maxChangingCells', label: 'Maximum cells', min: 1, max: 4, step: 1 },
+      { key: 'connectionTransitionDuration', label: 'Transition duration', min: 0.35, max: 2, step: 0.05 },
+      { key: 'cellCooldown', label: 'Cell cooldown', min: 3, max: 20, step: 0.5 },
+    ],
+  },
 ]
 
 function formatValue(value: number, step: number) {
   if (step >= 1) return value.toFixed(0)
   return value.toFixed(step < 0.05 ? 2 : 1)
+}
+
+function clampControl(control: DebugControl) {
+  const rawValue = Number(settings.value[control.key])
+  const safeValue = Number.isFinite(rawValue) ? rawValue : control.min
+  const clamped = Math.min(control.max, Math.max(control.min, safeValue))
+  const decimals = control.step < 1 ? Math.max(0, `${control.step}`.split('.')[1]?.length ?? 0) : 0
+  settings.value[control.key] = Number(clamped.toFixed(decimals))
+}
+
+function serializedSettings() {
+  return JSON.stringify({ ...settings.value }, null, 2)
+}
+
+async function copySettings() {
+  const value = serializedSettings()
+  copyStatus.value = ''
+  fallbackText.value = ''
+  try {
+    if (!navigator.clipboard?.writeText) throw new Error('Clipboard API unavailable')
+    await navigator.clipboard.writeText(value)
+    copyStatus.value = 'Settings copied'
+  } catch {
+    fallbackText.value = value
+    copyStatus.value = 'Copy manually below'
+  }
+}
+
+function resetSettings() {
+  reset()
+  copyStatus.value = 'Defaults restored'
+  fallbackText.value = ''
 }
 </script>
 
@@ -82,21 +162,41 @@ function formatValue(value: number, step: number) {
       </button>
       <div v-if="isOpen" class="particle-debug__panel">
         <div v-for="section in sections" :key="section.title" class="particle-debug__section">
-          <h2>{{ section.title }}</h2>
+          <div class="particle-debug__heading">
+            <h2>{{ section.title }}</h2>
+            <label v-if="section.toggleKey" class="particle-debug__switch">
+              <input v-model="settings[section.toggleKey]" type="checkbox" />
+              <span>{{ section.toggleLabel }}</span>
+            </label>
+          </div>
           <label v-for="control in section.controls" :key="control.key" class="particle-debug__control">
             <span>{{ control.label }}</span>
-            <output>{{ formatValue(settings[control.key], control.step) }}</output>
+            <input
+              v-model.number="settings[control.key]"
+              class="particle-debug__number"
+              type="number"
+              :min="control.min"
+              :max="control.max"
+              :step="control.step"
+              :aria-label="`${control.label} value`"
+              @change="clampControl(control)"
+              @blur="clampControl(control)"
+            />
             <input v-model.number="settings[control.key]" type="range" :min="control.min" :max="control.max" :step="control.step" />
+            <output>{{ formatValue(settings[control.key], control.step) }}</output>
           </label>
         </div>
         <div class="particle-debug__section particle-debug__utility">
-          <h2>Utility</h2>
+          <div class="particle-debug__heading"><h2>Utility</h2></div>
           <label class="particle-debug__check">
             <input v-model="settings.paused" type="checkbox" />
             <span>Pause animation</span>
           </label>
           <button type="button" @click="settings.cardsHidden = !settings.cardsHidden">{{ settings.cardsHidden ? 'Show cards' : 'Hide cards' }}</button>
-          <button type="button" @click="reset">Reset defaults</button>
+          <button type="button" @click="resetSettings">Reset defaults</button>
+          <button class="particle-debug__copy" type="button" @click="copySettings">Copy settings</button>
+          <p v-if="copyStatus" class="particle-debug__status" aria-live="polite">{{ copyStatus }}</p>
+          <textarea v-if="fallbackText" class="particle-debug__fallback" readonly :value="fallbackText" aria-label="Settings JSON for manual copy" />
         </div>
       </div>
     </section>
@@ -104,20 +204,24 @@ function formatValue(value: number, step: number) {
 </template>
 
 <style scoped>
-.particle-debug { position: fixed; z-index: 100; bottom: 16px; left: 16px; width: min(330px, calc(100vw - 32px)); color: #f7f4d0; font: 12px/1.35 Arial, sans-serif; }
+.particle-debug { position: fixed; z-index: 100; bottom: 16px; left: 16px; width: min(360px, calc(100vw - 32px)); color: #f7f4d0; font: 12px/1.35 Arial, sans-serif; }
 .particle-debug__toggle, .particle-debug__panel { border: 1px solid rgb(255 236 0 / 34%); border-radius: 8px; background: rgb(18 18 16 / 94%); box-shadow: 0 12px 38px rgb(0 0 0 / 38%); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); }
 .particle-debug__toggle { display: flex; justify-content: space-between; width: 100%; padding: 10px 12px; color: var(--color-accent); text-align: left; text-transform: uppercase; letter-spacing: .1em; }
-.particle-debug__panel { max-height: min(76vh, 720px); margin-top: 8px; padding: 12px; overflow-y: auto; scrollbar-color: rgb(255 236 0 / 44%) transparent; }
+.particle-debug__panel { max-height: calc(100vh - 82px); margin-top: 8px; padding: 12px; overflow-y: auto; overscroll-behavior: contain; scrollbar-color: rgb(255 236 0 / 44%) transparent; }
 .particle-debug__section + .particle-debug__section { margin-top: 16px; padding-top: 14px; border-top: 1px solid rgb(255 255 255 / 10%); }
-.particle-debug__section h2 { margin: 0 0 10px; color: rgb(255 236 0 / 78%); font-size: 10px; font-weight: 600; letter-spacing: .13em; text-transform: uppercase; }
-.particle-debug__control { display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; align-items: center; margin-top: 9px; }
-.particle-debug__control output { min-width: 34px; color: rgb(255 255 255 / 62%); font-variant-numeric: tabular-nums; text-align: right; }
-.particle-debug__control input { grid-column: 1 / -1; width: 100%; height: 3px; margin: 3px 0; accent-color: var(--color-accent); }
+.particle-debug__heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.particle-debug__heading h2 { margin: 0; color: rgb(255 236 0 / 78%); font-size: 10px; font-weight: 600; letter-spacing: .13em; text-transform: uppercase; }
+.particle-debug__switch, .particle-debug__check { display: flex; align-items: center; gap: 7px; color: rgb(255 255 255 / 76%); }
+.particle-debug__switch input, .particle-debug__check input { accent-color: var(--color-accent); }
+.particle-debug__control { display: grid; grid-template-columns: minmax(0, 1fr) 74px; gap: 4px 10px; align-items: center; margin-top: 9px; }
+.particle-debug__number { width: 74px; padding: 4px 5px; border: 1px solid rgb(255 255 255 / 16%); border-radius: 4px; color: #fff; background: rgb(255 255 255 / 5%); font: inherit; font-variant-numeric: tabular-nums; }
+.particle-debug__control input[type='range'] { width: 100%; height: 3px; margin: 3px 0; accent-color: var(--color-accent); }
+.particle-debug__control output { min-width: 34px; color: rgb(255 255 255 / 52%); font-variant-numeric: tabular-nums; text-align: right; }
 .particle-debug__utility { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-.particle-debug__utility h2, .particle-debug__check { grid-column: 1 / -1; }
-.particle-debug__check { display: flex; align-items: center; gap: 8px; }
-.particle-debug__check input { accent-color: var(--color-accent); }
+.particle-debug__utility .particle-debug__heading, .particle-debug__check, .particle-debug__copy, .particle-debug__status, .particle-debug__fallback { grid-column: 1 / -1; }
 .particle-debug__utility button { padding: 8px; border: 1px solid rgb(255 236 0 / 22%); border-radius: 5px; color: rgb(255 255 255 / 78%); font-size: 11px; }
 .particle-debug__utility button:hover { border-color: rgb(255 236 0 / 60%); color: var(--color-accent); }
-@media (max-width: 599px) { .particle-debug { bottom: 8px; left: 8px; width: min(310px, calc(100vw - 16px)); } }
+.particle-debug__status { margin: 2px 0 0; color: rgb(255 236 0 / 72%); font-size: 11px; }
+.particle-debug__fallback { width: 100%; min-height: 150px; resize: vertical; padding: 8px; border: 1px solid rgb(255 236 0 / 22%); border-radius: 5px; color: #fff; background: #10100f; font: 10px/1.4 Consolas, monospace; }
+@media (max-width: 599px) { .particle-debug { bottom: 8px; left: 8px; width: min(340px, calc(100vw - 16px)); } .particle-debug__panel { max-height: calc(100vh - 70px); } }
 </style>
