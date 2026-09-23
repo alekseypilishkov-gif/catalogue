@@ -21,11 +21,13 @@ export interface PolygonWaveSettings {
   faceShimmer: number
   edgeFadeStrength: number
   depthFadeStrength: number
-  foregroundSoftnessEnabled: boolean
+  blurEnabled: boolean
   focusDistance: number
-  nearSoftnessRange: number
-  softNodeFraction: number
-  softnessStrength: number
+  nearTransitionRange: number
+  maxBlurRadius: number
+  blurStrength: number
+  blurRenderScale: number
+  showBlurMask: boolean
   highlightsEnabled: boolean
   highlightFraction: number
   highlightIntensity: number
@@ -37,8 +39,21 @@ export interface PolygonWaveSettings {
   maxChangingCells: number
   connectionTransitionDuration: number
   cellCooldown: number
+  highlightChangingCells: boolean
   paused: boolean
   cardsHidden: boolean
+}
+
+export type PolygonWaveConnectionStatus = 'running' | 'paused' | 'reduced-motion' | 'disabled'
+
+export interface PolygonWaveDiagnostics {
+  selectedCellId: number | null
+  eligibleVisibleCellCount: number
+  activeTransitionCount: number
+  completedTransitionCount: number
+  status: PolygonWaveConnectionStatus
+  manualTestRequest: number
+  manualTestMessage: string
 }
 
 export const POLYGON_WAVE_DEFAULTS: PolygonWaveSettings = {
@@ -64,11 +79,13 @@ export const POLYGON_WAVE_DEFAULTS: PolygonWaveSettings = {
   faceShimmer: 0.52,
   edgeFadeStrength: 1.35,
   depthFadeStrength: 0.62,
-  foregroundSoftnessEnabled: true,
+  blurEnabled: true,
   focusDistance: 10.5,
-  nearSoftnessRange: 3.4,
-  softNodeFraction: 0.24,
-  softnessStrength: 0.58,
+  nearTransitionRange: 3.6,
+  maxBlurRadius: 9,
+  blurStrength: 0.72,
+  blurRenderScale: 0.65,
+  showBlurMask: false,
   highlightsEnabled: true,
   highlightFraction: 0.13,
   highlightIntensity: 1.25,
@@ -80,6 +97,17 @@ export const POLYGON_WAVE_DEFAULTS: PolygonWaveSettings = {
   maxChangingCells: 2,
   connectionTransitionDuration: 0.8,
   cellCooldown: 7,
+  highlightChangingCells: false,
   paused: false,
   cardsHidden: false,
+}
+
+export const POLYGON_WAVE_DIAGNOSTICS_DEFAULTS: PolygonWaveDiagnostics = {
+  selectedCellId: null,
+  eligibleVisibleCellCount: 0,
+  activeTransitionCount: 0,
+  completedTransitionCount: 0,
+  status: 'running',
+  manualTestRequest: 0,
+  manualTestMessage: '',
 }
