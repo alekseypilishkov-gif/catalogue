@@ -1263,6 +1263,6 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.polygon-wave { position: absolute; z-index: 0; inset: 0; overflow: hidden; pointer-events: none; }
+.polygon-wave { position: fixed; z-index: 0; inset: 0; overflow: hidden; pointer-events: none; }
 .polygon-wave :deep(canvas) { display: block; width: 100%; height: 100%; }
 </style>

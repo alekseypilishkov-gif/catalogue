@@ -104,10 +104,10 @@ export const POLYGON_WAVE_DEFAULTS: PolygonWaveSettings = {
   highlightChangingCells: false,
   paused: false,
   cardsHidden: false,
-  cardGlowSize: 56.05,
-  cardGlowBrightness: 1,
-  cardGlowBlur: 22,
-  cardBackgroundBlur: 64,
+  cardGlowSize: 80.5,
+  cardGlowBrightness: 0.55,
+  cardGlowBlur: 38,
+  cardBackgroundBlur: 15,
 }
 
 export const POLYGON_WAVE_DIAGNOSTICS_DEFAULTS: PolygonWaveDiagnostics = {
