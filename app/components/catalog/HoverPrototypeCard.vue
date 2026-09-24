@@ -23,6 +23,8 @@ const { card, glow, isCursorInside, enter, leave, moveCursor } = usePrototypeCar
   position: relative;
   width: min(709px, 100%);
   aspect-ratio: 709 / 689;
+  overflow: hidden;
+  border-radius: 8px;
   isolation: isolate;
 }
 
@@ -54,10 +56,9 @@ const { card, glow, isCursorInside, enter, leave, moveCursor } = usePrototypeCar
   inset: 0;
   display: block;
   overflow: hidden;
-  border: 1px solid transparent;
+  border: 0;
   border-radius: 8px;
-  background: linear-gradient(rgb(137 137 137 / 5%), rgb(137 137 137 / 5%)) padding-box,
-    linear-gradient(180deg, rgb(137 137 137 / 40%), rgb(137 137 137 / 20%)) border-box;
+  background: rgb(137 137 137 / 5%);
   box-shadow: var(--card-shadow);
   -webkit-backdrop-filter: blur(64px);
   backdrop-filter: blur(64px);
@@ -65,6 +66,20 @@ const { card, glow, isCursorInside, enter, leave, moveCursor } = usePrototypeCar
 }
 
 .hover-prototype__surface::before { display: none; }
+
+.hover-prototype__surface::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border: 1px solid transparent;
+  border-radius: inherit;
+  background: linear-gradient(180deg, rgb(137 137 137 / 40%), rgb(137 137 137 / 20%)) border-box;
+  -webkit-mask: linear-gradient(#fff 0 0) padding-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#fff 0 0) padding-box, linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+  pointer-events: none;
+}
 
 @media (prefers-reduced-motion: reduce) {
   .hover-prototype__glow { transition: none; }
