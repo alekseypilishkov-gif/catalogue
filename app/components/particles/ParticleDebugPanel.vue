@@ -30,6 +30,7 @@ const isOpen = ref(route.query.debug === '1')
 const copyStatus = ref('')
 const fallbackText = ref('')
 const collapsedSections = reactive<Record<string, boolean>>({
+  card: false,
   geometry: true,
   orientation: true,
   motion: true,
@@ -46,6 +47,16 @@ watch(() => route.query.debug === '1', (enabled) => {
 })
 
 const sections: DebugSection[] = [
+  {
+    id: 'card',
+    title: 'Card effects',
+    controls: [
+      { key: 'cardGlowSize', label: 'Glow size (%)', min: 10, max: 120, step: 0.05 },
+      { key: 'cardGlowBrightness', label: 'Glow brightness', min: 0, max: 3, step: 0.05 },
+      { key: 'cardGlowBlur', label: 'Glow blur (px)', min: 0, max: 100, step: 1 },
+      { key: 'cardBackgroundBlur', label: 'Card background blur (px)', min: 0, max: 128, step: 1 },
+    ],
+  },
   {
     id: 'geometry',
     title: 'Geometry',
@@ -205,9 +216,9 @@ function resetSettings() {
 
 <template>
   <Teleport to="body">
-    <section class="particle-debug" aria-label="Polygon wave debug panel">
+    <section class="particle-debug" aria-label="Effects debug panel">
       <button class="particle-debug__toggle" type="button" :aria-expanded="isOpen" @click="isOpen = !isOpen">
-        <span>Настройки волны</span>
+        <span>Настройки эффектов</span>
         <span aria-hidden="true">{{ isOpen ? '−' : '+' }}</span>
       </button>
       <div v-if="isOpen" class="particle-debug__panel">

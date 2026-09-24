@@ -1,4 +1,5 @@
 <script setup lang="ts">
+const { settings } = usePolygonWaveDebug()
 const { card, glow, isCursorInside, enter, leave, moveCursor } = usePrototypeCardGlow()
 </script>
 
@@ -7,6 +8,12 @@ const { card, glow, isCursorInside, enter, leave, moveCursor } = usePrototypeCar
     ref="card"
     class="hover-prototype"
     :class="{ 'is-hovered': isCursorInside }"
+    :style="{
+      '--prototype-glow-size': `${settings.cardGlowSize}%`,
+      '--prototype-glow-brightness': settings.cardGlowBrightness,
+      '--prototype-glow-blur': `${settings.cardGlowBlur}px`,
+      '--prototype-card-blur': `${settings.cardBackgroundBlur}px`,
+    }"
     aria-label="Прототип наведения на карточку каталога"
     @pointerenter="enter"
     @pointermove="moveCursor"
@@ -33,7 +40,7 @@ const { card, glow, isCursorInside, enter, leave, moveCursor } = usePrototypeCar
   z-index: 2;
   top: 50%;
   left: 50%;
-  width: 56.05%;
+  width: var(--prototype-glow-size, 56.05%);
   aspect-ratio: 1;
   border-radius: 50%;
   background: radial-gradient(circle,
@@ -42,13 +49,13 @@ const { card, glow, isCursorInside, enter, leave, moveCursor } = usePrototypeCar
     rgb(255 242 77 / 9%) 48%,
     transparent 70%);
   opacity: 0;
-  filter: blur(22px) brightness(var(--card-hover-glow-intensity, 1));
+  filter: blur(var(--prototype-glow-blur, 22px)) brightness(max(1, var(--prototype-glow-brightness, 1)));
   pointer-events: none;
   transform: translate3d(0, 0, 0) translate(-50%, -50%);
   transition: opacity 280ms ease;
 }
 
-.hover-prototype.is-hovered .hover-prototype__glow { opacity: var(--card-hover-glow-opacity, 1); }
+.hover-prototype.is-hovered .hover-prototype__glow { opacity: min(var(--card-hover-glow-opacity, 1), var(--prototype-glow-brightness, 1)); }
 
 .hover-prototype__surface {
   position: absolute;
@@ -60,8 +67,8 @@ const { card, glow, isCursorInside, enter, leave, moveCursor } = usePrototypeCar
   border-radius: 8px;
   background: rgb(137 137 137 / 5%);
   box-shadow: var(--card-shadow);
-  -webkit-backdrop-filter: blur(64px);
-  backdrop-filter: blur(64px);
+  -webkit-backdrop-filter: blur(var(--prototype-card-blur, 64px));
+  backdrop-filter: blur(var(--prototype-card-blur, 64px));
   pointer-events: none;
 }
 

@@ -42,6 +42,10 @@ export interface PolygonWaveSettings {
   highlightChangingCells: boolean
   paused: boolean
   cardsHidden: boolean
+  cardGlowSize: number
+  cardGlowBrightness: number
+  cardGlowBlur: number
+  cardBackgroundBlur: number
 }
 
 export type PolygonWaveConnectionStatus = 'running' | 'paused' | 'reduced-motion' | 'disabled'
@@ -100,6 +104,10 @@ export const POLYGON_WAVE_DEFAULTS: PolygonWaveSettings = {
   highlightChangingCells: false,
   paused: false,
   cardsHidden: false,
+  cardGlowSize: 56.05,
+  cardGlowBrightness: 1,
+  cardGlowBlur: 22,
+  cardBackgroundBlur: 64,
 }
 
 export const POLYGON_WAVE_DIAGNOSTICS_DEFAULTS: PolygonWaveDiagnostics = {
